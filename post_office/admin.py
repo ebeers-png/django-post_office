@@ -215,7 +215,8 @@ class EmailAdmin(admin.ModelAdmin):
 
     def resend(self, request, pk):
         instance = self.get_object(request, pk)
-        instance.dispatch()
+        # todo disabled
+        # instance.dispatch()
         messages.info(request, "Email has been sent again")
         return HttpResponseRedirect(reverse('admin:post_office_email_change', args=[instance.pk]))
 

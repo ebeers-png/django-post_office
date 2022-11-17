@@ -27,7 +27,9 @@ def send_mail(subject, message, from_email, recipient_list, html_message='',
     ]
     if priority == PRIORITY.now:
         for email in emails:
-            email.dispatch()
+            # todo disabling this for now
+            # email.dispatch()
+            pass
     return emails
 
 

@@ -1,5 +1,6 @@
 import os
 
+import re
 from collections import namedtuple
 from uuid import uuid4
 from email.mime.nonmultipart import MIMENonMultipart
@@ -20,6 +21,10 @@ from .logutils import setup_loghandlers
 from .settings import context_field_class, get_log_level, get_template_engine, get_override_recipients
 from .validators import validate_email_with_name, validate_template_syntax
 
+from seed.landing.models import SEEDUser as User
+from seed.lib.superperms.orgs.models import Organization
+from seed.utils.strings import check_if_context_appropriate
+
 
 logger = setup_loghandlers("INFO")
 
@@ -32,6 +37,31 @@ class Email(models.Model):
     """
     A model to hold email information.
     """
+    # BEAM
+    BEAM = 0
+    SCRIPT = 1
+    LANDING = 2
+    POST_OFFICE = 3
+    HELPDESK = 4
+    EMAIL_SOURCE_CHOICES = [
+        (BEAM, 'BEAM'),
+        (SCRIPT, 'Script'),
+        (LANDING, 'Landing'),
+        (POST_OFFICE, 'Post Office'),
+        (HELPDESK, 'Helpdesk'),
+    ]
+    organization = models.ForeignKey(Organization, on_delete=models.CASCADE, blank=True, null=True, related_name='emails')
+    user = models.ForeignKey(User, on_delete=models.CASCADE, blank=True, null=True, related_name='emails')
+
+    # M2M field used to account for merged and unmerged views
+    property_views = models.ManyToManyField('seed.PropertyView', related_name='emails')
+    taxlot_views = models.ManyToManyField('seed.TaxLotView', related_name='emails')
+    # When tickets are merged, emails are re-associated with the ticket that has been merged-into.
+    ticket = models.ForeignKey('helpdesk.Ticket', on_delete=models.SET_NULL, blank=True, null=True, related_name='emails')
+
+    source_page = models.IntegerField(help_text="Where in BEAM was this email sent from?", choices=EMAIL_SOURCE_CHOICES, default=None, blank=True, null=True)
+    source_action = models.CharField(help_text="Why was this email sent?", max_length=300, blank=True, null=True)
+    # end BEAM
 
     PRIORITY_CHOICES = [(PRIORITY.low, _("low")), (PRIORITY.medium, _("medium")),
                         (PRIORITY.high, _("high")), (PRIORITY.now, _("now"))]
@@ -86,22 +116,27 @@ class Email(models.Model):
         self._cached_email_message = None
 
     def __str__(self):
-        return '%s' % self.to
+        return 'Email - %s' % self.pk
 
     def email_message(self):
         """
         Returns Django EmailMessage object for sending.
+        Can also return EmailMultiAlternative or O365 Message object.
         """
+        # todo should make sure the _cached email message has a backend if we're using this to send it?
         if self._cached_email_message:
             return self._cached_email_message
 
         return self.prepare_email_message()
 
-    def prepare_email_message(self):
+    def prepare_email_message(self, connection=None):
         """
         Returns a django ``EmailMessage`` or ``EmailMultiAlternatives`` object,
         depending on whether html_message is empty.
+        Returns a O365 Message object is account is set.
         """
+        from seed.models.email_settings import MICROSOFT, GOOGLE
+
         if get_override_recipients():
             self.to = get_override_recipients()
 
@@ -118,7 +153,6 @@ class Email(models.Model):
             multipart_template = None
             html_message = self.html_message
 
-        connection = connections[self.backend_alias or 'default']
         if isinstance(self.headers, dict) or self.expires_at or self.message_id:
             headers = dict(self.headers or {})
             if self.expires_at:
@@ -128,41 +162,72 @@ class Email(models.Model):
         else:
             headers = None
 
-        if html_message:
-            if plaintext_message:
-                msg = EmailMultiAlternatives(
+        # construct the object to send
+        msg = None
+        sender = self.organization.sender
+        if sender.auth and connection:
+            if sender.auth.host_service == MICROSOFT:
+                msg = connection.new_message(resource=sender.email_address)
+                msg.sender.address = sender.email_address
+                msg.subject = subject
+                msg.to.add(self.to)
+                msg.cc.add(self.cc)
+                msg.bcc.add(self.bcc)
+                if html_message:
+                    msg.body = html_message
+                elif plaintext_message:
+                    msg.body = plaintext_message
+                """
+                todo
+                message_headers = []
+                for name, value in headers.items():
+                    if name.startswith('X-') or name.startswith('x-'):
+                        message_headers.append({'name': name, 'value': value})
+                msg.message_headers = message_headers
+                """
+                for attachment in self.attachments.all():
+                    msg.attachments.add(attachment.file.path)
+            elif sender.auth.host_service == GOOGLE:
+                msg = None
+            else:
+                msg = None
+        if not msg:
+            if html_message:
+                if plaintext_message:
+                    msg = EmailMultiAlternatives(
+                        subject=subject, body=plaintext_message, from_email=self.from_email,
+                        to=self.to, bcc=self.bcc, cc=self.cc,
+                        headers=headers)
+                    msg.attach_alternative(html_message, "text/html")
+                else:
+                    msg = EmailMultiAlternatives(
+                        subject=subject, body=html_message, from_email=self.from_email,
+                        to=self.to, bcc=self.bcc, cc=self.cc,
+                        headers=headers)
+                    msg.content_subtype = 'html'
+                if hasattr(multipart_template, 'attach_related'):
+                    multipart_template.attach_related(msg)
+            else:
+                msg = EmailMessage(
                     subject=subject, body=plaintext_message, from_email=self.from_email,
                     to=self.to, bcc=self.bcc, cc=self.cc,
-                    headers=headers, connection=connection)
-                msg.attach_alternative(html_message, "text/html")
-            else:
-                msg = EmailMultiAlternatives(
-                    subject=subject, body=html_message, from_email=self.from_email,
-                    to=self.to, bcc=self.bcc, cc=self.cc,
-                    headers=headers, connection=connection)
-                msg.content_subtype = 'html'
-            if hasattr(multipart_template, 'attach_related'):
-                multipart_template.attach_related(msg)
+                    headers=headers)
+            if connection:
+                msg.connection = connection
 
-        else:
-            msg = EmailMessage(
-                subject=subject, body=plaintext_message, from_email=self.from_email,
-                to=self.to, bcc=self.bcc, cc=self.cc,
-                headers=headers, connection=connection)
-
-        for attachment in self.attachments.all():
-            if attachment.headers:
-                mime_part = MIMENonMultipart(*attachment.mimetype.split('/'))
-                mime_part.set_payload(attachment.file.read())
-                for key, val in attachment.headers.items():
-                    try:
-                        mime_part.replace_header(key, val)
-                    except KeyError:
-                        mime_part.add_header(key, val)
-                msg.attach(mime_part)
-            else:
-                msg.attach(attachment.name, attachment.file.read(), mimetype=attachment.mimetype or None)
-            attachment.file.close()
+            for attachment in self.attachments.all():
+                if attachment.headers:
+                    mime_part = MIMENonMultipart(*attachment.mimetype.split('/'))
+                    mime_part.set_payload(attachment.file.read())
+                    for key, val in attachment.headers.items():
+                        try:
+                            mime_part.replace_header(key, val)
+                        except KeyError:
+                            mime_part.add_header(key, val)
+                    msg.attach(mime_part)
+                else:
+                    msg.attach(attachment.name, attachment.file.read(), mimetype=attachment.mimetype or None)
+                attachment.file.close()
 
         self._cached_email_message = msg
         return msg
@@ -173,10 +238,7 @@ class Email(models.Model):
         Sends email and log the result.
         """
         try:
-            self.email_message().send()
-            status = STATUS.sent
-            message = ''
-            exception_type = ''
+            result = self.email_message().send()
         except Exception as e:
             status = STATUS.failed
             message = str(e)
@@ -188,6 +250,19 @@ class Email(models.Model):
                 # If run in a bulk sending mode, re-raise and let the outer
                 # layer handle the exception
                 raise
+        else:
+            if result == 1:
+                status = STATUS.sent
+                message = ''
+                exception_type = ''
+            else:
+                status = STATUS.failed
+                message = 'Sending failed without an exception.'
+                exception_type = ''
+                if commit:
+                    logger.exception('Failed to send email without exception')
+                else:
+                    raise RuntimeError('Failed to send email without exception')
 
         if disconnect_after_delivery:
             connections.close()
@@ -252,6 +327,23 @@ class EmailTemplate(models.Model):
     """
     Model to hold template information from db
     """
+    # BEAM
+    organization = models.ForeignKey(Organization, on_delete=models.CASCADE, blank=True, null=True, related_name='email_templates')
+    user = models.ForeignKey(User, on_delete=models.CASCADE, blank=True, null=True, related_name='email_templates')
+    use_logo_header = models.BooleanField(_('Use Org Logo in Header'), blank=True, default=False,
+                                          help_text=_('If this is checked, it will add the Logo into the Email Banner'))
+    use_name_footer = models.BooleanField(_('Use Org Name in Footer'), blank=True, default=False,
+                                          help_text=_(
+                                              'If this is checked, it will add the Org name into the Email Footer'))
+    use_color_header = models.BooleanField(_('Use Org Color in Header'), blank=True, default=False,
+                                           help_text=_(
+                                               'If this is checked, it will add the Orgs Color into the Email Banner'))
+    use_color_footer = models.BooleanField(_('Use Org Color in Footer'), blank=True, default=False,
+                                           help_text=_(
+                                               'If this is checked, it will add the Orgs Color into the Email Footer'))
+    tag_mappings = models.JSONField(default=dict, blank=True)
+    # end BEAM
+
     name = models.CharField(_('Name'), max_length=255, help_text=_("e.g: 'welcome_email'"))
     description = models.TextField(_('Description'), blank=True,
                                    help_text=_("Description of this template."))
@@ -293,6 +385,76 @@ class EmailTemplate(models.Model):
         template = super().save(*args, **kwargs)
         cache.delete(self.name)
         return template
+
+    def get_context_names(self):
+        """
+        Go through text/html content and find instances where the template uses {{ tag }}. In some cases,
+        tag will be var[i] as tag didn't follow the correct formatting. Replace var[i] for stored tag in tag_mappings
+        :return: list, all instances of tags
+        """
+        tag_mappings = {v: k for k, v in self.tag_mappings.items()}
+        matches = []
+        for match in re.findall(r'{{[ ]*[^} \n]*[ ]*}}', self.subject + self.content):
+            match = match.strip(' {}')
+            if match in tag_mappings:
+                match = tag_mappings[match]
+            if match not in matches:
+                matches.append(match)
+
+        return matches
+
+    def build_tag_var_context(self, context):
+        """
+        When about to send an email, build an updated context using var[i] names since Django would probably still error
+        if we revert back to original tag names before sending
+        :param context: Dict, populated context being used to send emails
+        :return: dict, an updated context containing mapping of var[i] to context[original tag name]
+        """
+        new_context = {self.tag_mappings[tag]: context[tag] for tag in self.tag_mappings if tag in context}
+        return new_context
+
+    @classmethod
+    def get_tag_var_dict(cls, data):
+        """
+        Parse subject, and html_content to create a dict of {tag: var[i]} if the tag is not valid
+        :param data: The data from request.data made during an api call
+        :return: dict: A dict of mappings between tag name to var[i]
+        """
+        subject = data.get('subject', '')
+        content = data.get('html_content', '')
+        counter = 0
+        tag_mappings = {}
+
+        for match in re.findall('{{[ ]*[^}\n]*[ ]*}}', subject + content):
+            match = match.strip(' {}')  # Remove starting and ending tags/spaces
+            if not check_if_context_appropriate(match) and match not in tag_mappings:
+                tag_mappings[match] = 'var' + str(counter)
+                counter += 1
+
+        return tag_mappings
+
+    @classmethod
+    def replace_tags(cls, data, tag_mappings, reverse=False):
+        """
+        Parse subject, html_content, and content to replace tags in tag_mappings with their var[i] form.
+        tag_mappings can be form {tag: var[i]}, or if reverse is true, it has the reverse pairing form ie var[i] maps to tag
+        :param data: The data from request.data made during an api call
+        :param tag_mappings: The mapping of tag to var[i]
+        :param reverse: whether to reverse the tag_mappings mapping to replace var[i]s for tags
+        :return: dict: A dict of mappings between tag name to var[i]
+        """
+        if reverse:
+            tag_mappings = {v: k for k, v in tag_mappings.items()}
+
+        for attr in ['subject', 'html_content', 'content']:
+            if attr in data:
+                for k, v in tag_mappings.items():
+                    data[attr] = re.sub(r'{{[ ]*' + re.escape(k) + r'[ ]*}}', '{{ ' + v + ' }}', data[attr])
+
+        return data
+
+    def __str__(self):
+        return 'EmailTemplate - %s' % self.pk
 
 
 def get_upload_path(instance, filename):

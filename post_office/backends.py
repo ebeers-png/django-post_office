@@ -71,7 +71,9 @@ class EmailBackend(BaseEmailBackend):
                 email.attachments.add(*attachments)
 
             if get_default_priority() == 'now':
-                status = email.dispatch()
-                if status == STATUS.sent:
-                    num_sent += 1
+                # todo disabled
+                # status = email.dispatch()
+                # if status == STATUS.sent:
+                #     num_sent += 1
+                pass
         return num_sent

@@ -1,5 +1,5 @@
 import sys
-
+from functools import partial
 from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db import connection as db_connection
@@ -9,6 +9,7 @@ from django.utils import timezone
 from email.utils import make_msgid
 from multiprocessing import Pool
 from multiprocessing.dummy import Pool as ThreadPool
+from O365 import Account
 
 from .connections import connections
 from .lockfile import default_lockfile, FileLock, FileLocked
@@ -23,13 +24,17 @@ from .utils import (
     create_attachments, get_email_template, parse_emails, parse_priority, split_emails,
 )
 
+from seed.lib.superperms.orgs.models import Organization
+from seed.models.email_settings import MICROSOFT, GOOGLE
+from seed.utils.email import setup_basic_backend
+
 logger = setup_loghandlers("INFO")
 
 
 def create(sender, recipients=None, cc=None, bcc=None, subject='', message='',
            html_message='', context=None, scheduled_time=None, expires_at=None, headers=None,
            template=None, priority=None, render_on_delivery=False, commit=True,
-           backend=''):
+           backend='', organization=None, user=None, source_page=None, source_action=None):
     """
     Creates an email from supplied keyword arguments. If template is
     specified, email subject and content will be rendered during delivery.
@@ -59,11 +64,11 @@ def create(sender, recipients=None, cc=None, bcc=None, subject='', message='',
             expires_at=expires_at,
             message_id=message_id,
             headers=headers, priority=priority, status=status,
-            context=context, template=template, backend_alias=backend
+            context=context, template=template, backend_alias=backend,
+            organization=organization, user=user, source_page=source_page, source_action=source_action
         )
 
     else:
-
         if template:
             subject = template.subject
             message = template.content
@@ -88,6 +93,7 @@ def create(sender, recipients=None, cc=None, bcc=None, subject='', message='',
             headers=headers, priority=priority, status=status,
             backend_alias=backend,
             template=template,
+            organization=organization, user=user, source_page=source_page, source_action=source_action
         )
 
     if commit:
@@ -100,11 +106,14 @@ def send(recipients=None, sender=None, template=None, context=None, subject='',
          message='', html_message='', scheduled_time=None, expires_at=None, headers=None,
          priority=None, attachments=None, render_on_delivery=False,
          log_level=None, commit=True, cc=None, bcc=None, language='',
-         backend=''):
+         backend='', organization=None, user=None, source_page=None, source_action=None):
     try:
         recipients = parse_emails(recipients)
     except ValidationError as e:
         raise ValidationError('recipients: %s' % e.message)
+
+    if organization is None:
+        raise ValueError("Email must be sent by an organization.")
 
     try:
         cc = parse_emails(cc)
@@ -152,14 +161,17 @@ def send(recipients=None, sender=None, template=None, context=None, subject='',
 
     email = create(sender, recipients, cc, bcc, subject, message, html_message,
                    context, scheduled_time, expires_at, headers, template, priority,
-                   render_on_delivery, commit=commit, backend=backend)
+                   render_on_delivery, commit=commit, backend=backend,
+                   organization=organization, user=user, source_page=source_page, source_action=source_action)
 
     if attachments:
         attachments = create_attachments(attachments)
         email.attachments.add(*attachments)
 
     if priority == PRIORITY.now:
-        email.dispatch(log_level=log_level)
+        # todo disabling this for now
+        # email.dispatch(log_level=log_level)
+        pass
     email_queued.send(sender=Email, emails=[email])
 
     return email
@@ -177,7 +189,7 @@ def send_many(kwargs_list):
         email_queued.send(sender=Email, emails=emails)
 
 
-def get_queued():
+def get_queued(organization=None):
     """
     Returns the queryset of emails eligible for sending – fulfilling these conditions:
      - Status is queued or requeued
@@ -190,6 +202,9 @@ def get_queued():
         (Q(scheduled_time__lte=now) | Q(scheduled_time__isnull=True)) &
         (Q(expires_at__gt=now) | Q(expires_at__isnull=True))
     )
+    if organization:
+        query = query & (Q(organization=organization))
+
     return Email.objects.filter(query) \
                 .select_related('template') \
                 .order_by(*get_sending_order()).prefetch_related('attachments')[:get_batch_size()]
@@ -199,9 +214,14 @@ def send_queued(processes=1, log_level=None):
     """
     Sends out all queued mails that has scheduled_time less than now or None
     """
-    queued_emails = get_queued()
-    total_sent, total_failed, total_requeued = 0, 0, 0
-    total_email = len(queued_emails)
+    total_sent, total_failed, total_requeued, total_email = 0, 0, 0, 0
+    orgs = Organization.objects.all()
+    queued_emails_by_org = {}
+    for org in orgs:
+        queued = get_queued(organization=org)
+        if queued:
+            queued_emails_by_org[org] = queued
+            total_email += len(queued)
 
     logger.info('Started sending %s emails with %s processes.' %
                 (total_email, processes))
@@ -209,27 +229,34 @@ def send_queued(processes=1, log_level=None):
     if log_level is None:
         log_level = get_log_level()
 
-    if queued_emails:
-        # Don't use more processes than number of emails
-        if total_email < processes:
-            processes = total_email
+    if queued_emails_by_org:
+        for org, queued_emails in queued_emails_by_org.items():
+            logger.info(f'Started sending {len(queued_emails)} emails for org ({org.id}) {org.name} with {processes} processes.')
+            # Don't use more processes than number of emails
+            if total_email < processes:
+                processes = total_email
 
-        if processes == 1:
-            total_sent, total_failed, total_requeued = _send_bulk(
-                emails=queued_emails,
-                uses_multiprocessing=False,
-                log_level=log_level,
-            )
-        else:
-            email_lists = split_emails(queued_emails, processes)
+            if processes == 1:
+                result = _send_bulk(
+                    emails=queued_emails,
+                    uses_multiprocessing=False,
+                    log_level=log_level,
+                    organization=org,
+                )
+                total_sent += result[0]
+                total_failed += result[1]
+                total_requeued += result[2]
 
-            pool = Pool(processes)
-            results = pool.map(_send_bulk, email_lists)
-            pool.terminate()
+            else:
+                email_lists = split_emails(queued_emails, processes)
 
-            total_sent = sum(result[0] for result in results)
-            total_failed = sum(result[1] for result in results)
-            total_requeued = [result[2] for result in results]
+                pool = Pool(processes)
+                results = pool.map(partial(_send_bulk, organization=org), email_lists)
+                pool.terminate()
+
+                total_sent += sum(result[0] for result in results)
+                total_failed += sum(result[1] for result in results)
+                total_requeued += [result[2] for result in results]
 
     logger.info(
         '%s emails attempted, %s sent, %s failed, %s requeued',
@@ -239,7 +266,7 @@ def send_queued(processes=1, log_level=None):
     return total_sent, total_failed, total_requeued
 
 
-def _send_bulk(emails, uses_multiprocessing=True, log_level=None):
+def _send_bulk(emails, uses_multiprocessing=True, log_level=None, organization=None):
     # Multiprocessing does not play well with database connection
     # Fix: Close connections on forking process
     # https://groups.google.com/forum/#!topic/django-users/eCAIY9DAfG0
@@ -265,13 +292,39 @@ def _send_bulk(emails, uses_multiprocessing=True, log_level=None):
             logger.exception('Failed to send email #%d' % email.id)
             failed_emails.append((email, e))
 
+    # set up backend
+    sender = organization.sender
+    connection = None
+    if not sender:
+        logger.exception('Emails could not be sent, exiting process')
+        return 0, 0, 0
+    if sender.auth:
+        if sender.auth.host_service == MICROSOFT:
+            # set up connection with Microsoft
+            auth = {
+               'client_id': sender.auth.get_client_id(),
+               'client_secret': sender.auth.get_client_secret(),
+               'tenant_id': sender.auth.get_tenant_id()
+            }
+            token_backend = sender.auth.get_access_token_backend()
+            connection = Account((auth['client_id'], auth['client_secret']), auth_flow_type='credentials',
+                                 tenant_id=auth['tenant_id'], token_backend=token_backend)
+            if not connection.authenticate():
+                logger.exception('Unable to authenticate Microsoft connection.')
+                return 0, 0, 0
+        elif sender.auth.host_service == GOOGLE:
+            logger.exception('Emails could not be sent - Google is not yet supported. Exiting process')
+            return 0, 0, 0
+    else:
+        connection = setup_basic_backend(None, sender=sender)
+
     # Prepare emails before we send these to threads for sending
     # So we don't need to access the DB from within threads
     for email in emails:
         # Sometimes this can fail, for example when trying to render
         # email from a faulty Django template
         try:
-            email.prepare_email_message()
+            email.prepare_email_message(connection=connection)
         except Exception as e:
             logger.exception('Failed to prepare email #%d' % email.id)
             failed_emails.append((email, e))
@@ -334,7 +387,7 @@ def _send_bulk(emails, uses_multiprocessing=True, log_level=None):
             Log.objects.bulk_create(logs)
 
     logger.info(
-        'Process finished, %s attempted, %s sent, %s failed, %s requeued',
+        f'Process finished for ({organization.id}) {organization.name}, %s attempted, %s sent, %s failed, %s requeued',
         email_count, len(sent_emails), num_failed, num_requeued,
     )
 
