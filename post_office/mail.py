@@ -34,7 +34,7 @@ logger = setup_loghandlers("INFO")
 def create(sender, recipients=None, cc=None, bcc=None, subject='', message='',
            html_message='', context=None, scheduled_time=None, expires_at=None, headers=None,
            template=None, priority=None, render_on_delivery=False, commit=True,
-           backend='', organization=None, user=None, source_page=None, source_action=None):
+           backend='', organization=None, user=None, source_page=None, source_action=None, ticket=None):
     """
     Creates an email from supplied keyword arguments. If template is
     specified, email subject and content will be rendered during delivery.
@@ -65,7 +65,8 @@ def create(sender, recipients=None, cc=None, bcc=None, subject='', message='',
             message_id=message_id,
             headers=headers, priority=priority, status=status,
             context=context, template=template, backend_alias=backend,
-            organization=organization, user=user, source_page=source_page, source_action=source_action
+            organization=organization, user=user, source_page=source_page, source_action=source_action,
+            ticket=ticket
         )
 
     else:
@@ -93,7 +94,11 @@ def create(sender, recipients=None, cc=None, bcc=None, subject='', message='',
             headers=headers, priority=priority, status=status,
             backend_alias=backend,
             template=template,
-            organization=organization, user=user, source_page=source_page, source_action=source_action
+            organization=organization,
+            user=user,
+            source_page=source_page,
+            source_action=source_action,
+            ticket=ticket
         )
 
     if commit:
@@ -106,7 +111,10 @@ def send(recipients=None, sender=None, template=None, context=None, subject='',
          message='', html_message='', scheduled_time=None, expires_at=None, headers=None,
          priority=None, attachments=None, render_on_delivery=False,
          log_level=None, commit=True, cc=None, bcc=None, language='',
-         backend='', organization=None, user=None, source_page=None, source_action=None):
+         backend='',
+         organization=None, user=None, source_page=None, source_action=None,
+         ticket=None, property_views=None, taxlot_views=None):
+    # todo save senderobj , not from_address
     try:
         recipients = parse_emails(recipients)
     except ValidationError as e:
@@ -126,7 +134,10 @@ def send(recipients=None, sender=None, template=None, context=None, subject='',
         raise ValidationError('bcc: %s' % e.message)
 
     if sender is None:
-        sender = settings.DEFAULT_FROM_EMAIL
+        if getattr(organization, 'sender', False):
+            sender = organization.sender.email_address
+        else:
+            sender = settings.DEFAULT_FROM_EMAIL
 
     priority = parse_priority(priority)
 
@@ -138,6 +149,8 @@ def send(recipients=None, sender=None, template=None, context=None, subject='',
             raise ValueError("send_many() can't be used with priority = 'now'")
         if attachments:
             raise ValueError("Can't add attachments with send_many()")
+        if property_views or taxlot_views:
+            raise ValueError("Can't associate emails with property/taxlot_views with send_many()")
 
     if template:
         if subject:
@@ -162,11 +175,16 @@ def send(recipients=None, sender=None, template=None, context=None, subject='',
     email = create(sender, recipients, cc, bcc, subject, message, html_message,
                    context, scheduled_time, expires_at, headers, template, priority,
                    render_on_delivery, commit=commit, backend=backend,
-                   organization=organization, user=user, source_page=source_page, source_action=source_action)
+                   organization=organization, user=user, source_page=source_page, source_action=source_action,
+                   ticket=ticket)
 
     if attachments:
         attachments = create_attachments(attachments)
         email.attachments.add(*attachments)
+    if property_views:
+        email.property_views.set(property_views)
+    if taxlot_views:
+        email.taxlot_views.set(taxlot_views)
 
     if priority == PRIORITY.now:
         # todo disabling this for now
