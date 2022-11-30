@@ -5,6 +5,7 @@ from collections import namedtuple
 from uuid import uuid4
 from email.mime.nonmultipart import MIMENonMultipart
 
+from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.core.mail import EmailMessage, EmailMultiAlternatives
 from django.db import models
@@ -185,6 +186,18 @@ class Email(models.Model):
                         message_headers.append({'name': name, 'value': value})
                 msg.message_headers = message_headers
                 """
+
+                # Add an inline logo header.
+                if self.template and self.template.use_logo_header:
+                    logo_path = settings.MEDIA_ROOT + '/' + self.organization.logo.filename()
+                    # todo check that the cid we have found is the logo itself?
+                    match = re.search('src="cid:([a-zA-Z0-9]*)"', html_message).group(1)
+                    if match:
+                        msg.attachments.add(logo_path)
+                        att = msg.attachments[0]
+                        att.is_inline = True
+                        att.content_id = match
+
                 for attachment in self.attachments.all():
                     msg.attachments.add(attachment.file.path)
             elif sender.auth.host_service == GOOGLE:
