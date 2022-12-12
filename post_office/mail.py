@@ -78,7 +78,11 @@ def create(sender, recipients=None, cc=None, bcc=None, subject='', message='',
         _context = Context(context or {})
         subject = Template(subject).render(_context)
         message = Template(message).render(_context)
+        logger.info('1-------------------')
+        logger.info(html_message)
+        logger.info('2-------------------')
         html_message = Template(html_message).render(_context)
+        logger.info(html_message)
 
         email = Email(
             from_email=sender,
