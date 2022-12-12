@@ -187,11 +187,12 @@ class Email(models.Model):
                 msg.message_headers = message_headers
                 """
 
+                logger.info(html_message)
                 # Add an inline logo header.
                 if self.template and self.template.use_logo_header:
                     logo_path = os.path.join(settings.MEDIA_ROOT, self.organization.logo.filename())
                     # todo check that the cid we have found is the logo itself?
-                    match = re.search('src="cid:([a-zA-Z0-9]*)"', html_message)
+                    match = re.search(r'src="cid:([a-zA-Z0-9]*)"', html_message)
                     if match:
                         msg.attachments.add(logo_path)
                         att = msg.attachments[0]
