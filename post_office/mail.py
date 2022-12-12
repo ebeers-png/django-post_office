@@ -17,7 +17,7 @@ from .logutils import setup_loghandlers
 from .models import Email, EmailTemplate, Log, PRIORITY, STATUS
 from .settings import (
     get_available_backends, get_batch_size, get_log_level, get_max_retries, get_message_id_enabled,
-    get_message_id_fqdn, get_retry_timedelta, get_sending_order, get_threads_per_process,
+    get_message_id_fqdn, get_retry_timedelta, get_sending_order, get_threads_per_process, get_template_engine
 )
 from .signals import email_queued
 from .utils import (
@@ -68,12 +68,13 @@ def create(sender, recipients=None, cc=None, bcc=None, subject='', message='',
             organization=organization, user=user, source_page=source_page, source_action=source_action,
             ticket=ticket
         )
-
     else:
         if template:
-            subject = template.subject
-            message = template.content
-            html_message = template.html_content
+            engine = get_template_engine()
+            subject = engine.from_string(template.subject).render(context)
+            message = engine.from_string(template.content).render(context)
+            multipart_template = engine.from_string(template.html_content)
+            html_message = multipart_template.render(context)
 
         _context = Context(context or {})
         subject = Template(subject).render(_context)
