@@ -70,20 +70,14 @@ def create(sender, recipients=None, cc=None, bcc=None, subject='', message='',
         )
     else:
         if template:
-            engine = get_template_engine()
-            subject = engine.from_string(template.subject).render(context)
-            message = engine.from_string(template.content).render(context)
-            multipart_template = engine.from_string(template.html_content)
-            html_message = multipart_template.render(context)
+            subject = template.subject
+            message = template.content
+            html_message = template.html_content
 
         _context = Context(context or {})
         subject = Template(subject).render(_context)
         message = Template(message).render(_context)
-        logger.info('1-------------------')
-        logger.info(html_message)
-        logger.info('2-------------------')
         html_message = Template(html_message).render(_context)
-        logger.info(html_message)
 
         email = Email(
             from_email=sender,
