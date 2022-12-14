@@ -8,11 +8,8 @@ import django.db.models.deletion
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('seed', '0207_delete_beam_postoffice'),
-        migrations.swappable_dependency(settings.AUTH_USER_MODEL),
-        ('helpdesk', '0075_forms_unlisted'),
-        ('orgs', '0041_organization_bcc_enabled'),
         ('post_office', '0012_auto_20221115_0850'),
+        ('seed', '0207_delete_beam_postoffice'),
     ]
 
     operations = [

@@ -8,11 +8,8 @@ import django.db.models.deletion
 class Migration(migrations.Migration):
 
     dependencies = [
-        migrations.swappable_dependency(settings.AUTH_USER_MODEL),
-        ('seed', '0205_email_oauth'),
-        ('orgs', '0041_organization_bcc_enabled'),
-        ('helpdesk', '0075_forms_unlisted'),
         ('post_office', '0011_models_help_text'),
+        ('seed', '0205_email_oauth'),
     ]
 
     operations = [
