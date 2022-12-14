@@ -200,7 +200,8 @@ class Email(models.Model):
                         att.content_id = match.group(1)
 
                 for attachment in self.attachments.all():
-                    msg.attachments.add(attachment.file.path)
+                    path = os.path.join(settings.MEDIA_ROOT, attachment.file.name)  # should be the relative path
+                    msg.attachments.add(path)
             elif sender.auth.host_service == GOOGLE:
                 msg = None
             else:
