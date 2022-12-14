@@ -187,7 +187,6 @@ class Email(models.Model):
                 msg.message_headers = message_headers
                 """
 
-                logger.info(html_message)
                 # Add an inline logo header.
                 if self.template and self.template.use_logo_header:
                     logo_path = os.path.join(settings.MEDIA_ROOT, self.organization.logo.filename())
