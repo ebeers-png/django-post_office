@@ -197,10 +197,10 @@ class Email(models.Model):
                         att = msg.attachments[0]
                         att.is_inline = True
                         att.content_id = match.group(1)
-
                 for attachment in self.attachments.all():
                     path = os.path.join(settings.MEDIA_ROOT, attachment.file.name)  # should be the relative path
-                    msg.attachments.add(path)
+                    msg.attachments.add([(path, attachment.name)])  # must add as a list of tuples to add a custom name
+
             elif sender.auth.host_service == GOOGLE:
                 msg = None
             else:
