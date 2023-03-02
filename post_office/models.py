@@ -14,6 +14,9 @@ from django.utils.translation import pgettext_lazy, gettext_lazy as _
 from django.utils import timezone
 from jsonfield import JSONField
 
+from exchangelib import HTMLBody, Message as EWSMessage
+from exchangelib.util import MalformedResponseError
+
 from post_office import cache
 from post_office.fields import CommaSeparatedEmailField
 
@@ -136,7 +139,7 @@ class Email(models.Model):
         depending on whether html_message is empty.
         Returns a O365 Message object is account is set.
         """
-        from seed.models.email_settings import MICROSOFT, GOOGLE
+        from seed.models.email_settings import MICROSOFT, GOOGLE, EWS_PASS
 
         if get_override_recipients():
             self.to = get_override_recipients()
@@ -201,6 +204,18 @@ class Email(models.Model):
                     path = os.path.join(settings.MEDIA_ROOT, attachment.file.name)  # should be the relative path
                     msg.attachments.add([(path, attachment.name)])  # must add as a list of tuples to add a custom name
 
+            if sender.auth.host_service == EWS_PASS:
+                msg = EWSMessage(
+                    account=connection,
+                    folder=connection.sent,
+                    subject=subject,
+                    body=HTMLBody(html_message) if html_message else plaintext_message,  # todo - does this work with admin?
+                    to_recipients=self.to,
+                    cc_recipients=self.cc,
+                    bcc_recipients=self.bcc,
+                )
+                # todo attachments
+
             elif sender.auth.host_service == GOOGLE:
                 msg = None
             else:
@@ -252,31 +267,65 @@ class Email(models.Model):
         Sends email and log the result.
         """
         try:
-            result = self.email_message().send()
-        except Exception as e:
-            status = STATUS.failed
-            message = str(e)
-            exception_type = type(e).__name__
-
+            mail = self.email_message()
+        except Exception:
             if commit:
-                logger.exception('Failed to send email')
+                status = STATUS.failed
+                message = 'Failed to retrieve email message.'
+                exception_type = ''
+                logger.exception('Failed to retrieve email message.')
             else:
-                # If run in a bulk sending mode, re-raise and let the outer
-                # layer handle the exception
+                # If run in a bulk sending mode, re-raise and let the outer layer handle the exception
                 raise
         else:
-            if result == 1:
-                status = STATUS.sent
-                message = ''
-                exception_type = ''
-            else:
-                status = STATUS.failed
-                message = 'Sending failed without an exception.'
-                exception_type = ''
-                if commit:
-                    logger.exception('Failed to send email without exception')
+            if isinstance(mail, EWSMessage):
+                try:
+                    result = mail.send_and_save()
+                except Exception as e:
+                    if commit:
+                        status = STATUS.failed
+                        message = str(e)
+                        exception_type = type(e).__name__
+                        logger.exception('Failed to send email with EWS')
+                    else:
+                        raise
                 else:
-                    raise RuntimeError('Failed to send email without exception')
+                    if result is None:
+                        status = STATUS.sent
+                        message = ''
+                        exception_type = ''
+                    else:
+                        if commit:
+                            status = STATUS.failed
+                            message = 'Sending failed without an exception.'
+                            exception_type = ''
+                            logger.exception('Failed to send email without exception')
+                        else:
+                            raise RuntimeError('Failed to send email without exception')
+            else:
+                try:
+                    result = mail.send()
+                except Exception as e:
+                    if commit:
+                        status = STATUS.failed
+                        message = str(e)
+                        exception_type = type(e).__name__
+                        logger.exception('Failed to send email')
+                    else:
+                        raise
+                else:
+                    if result == 1:
+                        status = STATUS.sent
+                        message = ''
+                        exception_type = ''
+                    else:
+                        if commit:
+                            status = STATUS.failed
+                            message = 'Sending failed without an exception.'
+                            exception_type = ''
+                            logger.exception('Failed to send email without exception')
+                        else:
+                            raise RuntimeError('Failed to send email without exception')
 
         if disconnect_after_delivery:
             connections.close()
@@ -290,13 +339,10 @@ class Email(models.Model):
 
             # If log level is 0, log nothing, 1 logs only sending failures
             # and 2 means log both successes and failures
-            if log_level == 1:
-                if status == STATUS.failed:
-                    self.logs.create(status=status, message=message,
-                                     exception_type=exception_type)
+            if log_level == 1 and status == STATUS.failed:
+                self.logs.create(status=status, message=message, exception_type=exception_type)
             elif log_level == 2:
-                self.logs.create(status=status, message=message,
-                                 exception_type=exception_type)
+                self.logs.create(status=status, message=message, exception_type=exception_type)
 
         return status
 
