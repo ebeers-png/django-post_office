@@ -9,8 +9,6 @@ from django.utils import timezone
 from email.utils import make_msgid
 from multiprocessing import Pool
 from multiprocessing.dummy import Pool as ThreadPool
-from O365 import Account as MSAccount
-from exchangelib import Credentials, Configuration, Version, Build, DELEGATE, Account as EWSAccount
 
 from .connections import connections
 from .lockfile import default_lockfile, FileLock, FileLocked
@@ -26,7 +24,6 @@ from .utils import (
 )
 
 from seed.lib.superperms.orgs.models import Organization
-from seed.models.email_settings import MICROSOFT, GOOGLE, EWS_PASS
 from seed.utils.email import setup_basic_backend
 
 logger = setup_loghandlers("INFO")
@@ -312,89 +309,14 @@ def _send_bulk(emails, uses_multiprocessing=True, log_level=None, organization=N
 
     # set up backend
     sender = organization.sender
-    connection = None
     if not sender:
         logger.exception('Emails could not be sent, exiting process')
         return 0, 0, 0
     if sender.auth:
-        if sender.auth.host_service == MICROSOFT:
-            # set up connection with Microsoft
-            auth = {
-               'client_id': sender.auth.get_client_id(),
-               'client_secret': sender.auth.get_client_secret(),
-               'tenant_id': sender.auth.get_tenant_id()
-            }
-            token_backend = sender.auth.get_access_token_backend()
-            connection = MSAccount((auth['client_id'], auth['client_secret']), auth_flow_type='credentials',
-                                 tenant_id=auth['tenant_id'], token_backend=token_backend)
-            if not connection.authenticate():
-                logger.exception('Unable to authenticate Microsoft connection.')
-                return 0, 0, 0
-
-        elif sender.auth.host_service == EWS_PASS:
-            auth = {
-                'username': sender.username,
-                'password': sender.password,
-                'server': f'https://{sender.host}/',
-                'service_endpoint': f'http://{sender.host}/ews/exchange.asmx',
-                'email_address': sender.email_address
-            }
-            logger.info('Creating EWS Credentials...')
-            credentials = Credentials(username=auth['username'], password=auth['password'])
-            cached_config = None
-
-            # if we have config details saved, use those to avoid needing to auto-discover
-            if sender.ews_auth_type and sender.ews_server_version:
-                version = [int(n) for n in sender.ews_server_version.split('.', 4)]
-                try:
-                    version = Version(build=Build(*version))
-                except ValueError:
-                    pass
-                else:
-                    logger.info('Creating EWS Configuration...')
-                    cached_config = Configuration(
-                        credentials=credentials,
-                        auth_type=sender.ews_auth_type,
-                        version=version,
-                        service_endpoint=auth['service_endpoint']
-                    )
-            if cached_config:
-                try:
-                    logger.info('Logging in with cached information first...')
-                    connection = EWSAccount(
-                        primary_smtp_address=auth['email_address'],
-                        config=cached_config,
-                        autodiscover=False,
-                        access_type=DELEGATE
-                    )
-                    assert connection.ad_response
-                except Exception:
-                    logger.info('Unable to find account with cached information - trying auto-discover now...')
-                    connection = None
-                else:
-                    logger.info('Connection successful.')
-            if not connection:
-                try:
-                    connection = EWSAccount(
-                        primary_smtp_address=auth['email_address'],
-                        credentials=credentials,
-                        autodiscover=True,
-                        access_type=DELEGATE
-                    )
-                    assert connection.ad_response
-                except Exception:
-                    logger.exception('Unable to authenticate EWS connection.')
-                    return 0, 0, 0
-                else:
-                    logger.info('Connection successful. Caching account information...')
-                    sender.host = connection.protocol.server
-                    sender.ews_auth_type = connection.protocol.auth_type
-                    sender.ews_server_version = str(connection.version.build) if connection.version else ''
-                    sender.save()
-
-        elif sender.auth.host_service == GOOGLE:
-            logger.exception('Emails could not be sent - Google is not yet supported. Exiting process')
-            return 0, 0, 0
+        # todo make sure errors in login() will show up in the logger properly
+        connection, error = sender.auth.login(logger=logger, email=sender)
+        if error:
+            return error
     else:
         connection = setup_basic_backend(None, sender=sender)
 

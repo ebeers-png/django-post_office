@@ -13,9 +13,9 @@ from django.utils.encoding import smart_str
 from django.utils.translation import pgettext_lazy, gettext_lazy as _
 from django.utils import timezone
 from jsonfield import JSONField
+from django.core.files.storage import default_storage
 
-from exchangelib import HTMLBody, Message as EWSMessage
-from exchangelib.util import MalformedResponseError
+from exchangelib import HTMLBody, Message as EWSMessage, ExtendedProperty, FileAttachment
 
 from post_office import cache
 from post_office.fields import CommaSeparatedEmailField
@@ -35,6 +35,12 @@ logger = setup_loghandlers("INFO")
 
 PRIORITY = namedtuple('PRIORITY', 'low medium high now')._make(range(4))
 STATUS = namedtuple('STATUS', 'sent failed queued requeued')._make(range(4))
+
+
+class BEAMHeader(ExtendedProperty):
+    distinguished_property_set_id = "InternetHeaders"
+    property_name = "X-BEAMHelpdesk-Delivered"
+    property_type = 'String'
 
 
 class Email(models.Model):
@@ -171,6 +177,8 @@ class Email(models.Model):
         sender = self.organization.sender
         if sender.auth and connection:
             if sender.auth.host_service == MICROSOFT:
+                # connection will be a python-o365 Account object
+                # msg will be a python-o365 Message object
                 msg = connection.new_message(resource=sender.email_address)
                 msg.sender.address = sender.email_address
                 msg.subject = subject
@@ -204,17 +212,38 @@ class Email(models.Model):
                     path = os.path.join(settings.MEDIA_ROOT, attachment.file.name)  # should be the relative path
                     msg.attachments.add([(path, attachment.name)])  # must add as a list of tuples to add a custom name
 
-            if sender.auth.host_service == EWS_PASS:
+            elif sender.auth.host_service == EWS_PASS:
+                # connection will be an exchangelib Account object
+                # msg will be an exchangelib Message (EWSMessage) object
+
+                # in EWS, must register the header before using it as a field
+                # https://web.archive.org/web/20221204210117/https://mellositmusings.com/2018/12/23/sending-an-email-with-x-headers-in-ews-via-powershell/
+                if 'beam_header' not in EWSMessage.supported_fields(connection.version):
+                    # not sure how to create class we can use for multiple headers... only usable with X-BEAMHelpdesk-Delivered for now
+                    EWSMessage.register(attr_name="beam_header", attr_cls=BEAMHeader)
+                    if 'beam_header' not in EWSMessage.supported_fields(connection.version):
+                        logger.error("Could not register BEAM header in EWS.")
+
                 msg = EWSMessage(
                     account=connection,
-                    folder=connection.sent,
+                    folder=connection.sent,  # saves email to this folder
                     subject=subject,
-                    body=HTMLBody(html_message) if html_message else plaintext_message,  # todo - does this work with admin?
+                    body=HTMLBody(html_message) if html_message else plaintext_message,
                     to_recipients=self.to,
                     cc_recipients=self.cc,
                     bcc_recipients=self.bcc,
                 )
-                # todo attachments
+                msg.save()
+
+                if 'X-BEAMHelpdesk-Delivered' in headers and 'beam_header' in EWSMessage.supported_fields(connection.version):
+                    msg.beam_header = headers['X-BEAMHelpdesk-Delivered']
+                    msg.save()
+
+                for attachment in self.attachments.all():
+                    path = os.path.join(settings.MEDIA_ROOT, attachment.file.name)
+                    binary_file_content = default_storage.open(path).read()
+                    file = FileAttachment(name=attachment.name, content=binary_file_content)
+                    msg.attach(file)
 
             elif sender.auth.host_service == GOOGLE:
                 msg = None
@@ -242,6 +271,7 @@ class Email(models.Model):
                     to=self.to, bcc=self.bcc, cc=self.cc,
                     headers=headers)
             if connection:
+                # connection should be already supplied by setup_basic_backend
                 msg.connection = connection
 
             for attachment in self.attachments.all():
@@ -278,54 +308,29 @@ class Email(models.Model):
                 # If run in a bulk sending mode, re-raise and let the outer layer handle the exception
                 raise
         else:
-            if isinstance(mail, EWSMessage):
-                try:
-                    result = mail.send_and_save()
-                except Exception as e:
-                    if commit:
-                        status = STATUS.failed
-                        message = str(e)
-                        exception_type = type(e).__name__
-                        logger.exception('Failed to send email with EWS')
-                    else:
-                        raise
+            try:
+                result = mail.send()
+            except Exception as e:
+                if commit:
+                    status = STATUS.failed
+                    message = str(e)
+                    exception_type = type(e).__name__
+                    logger.exception('Failed to send email')
                 else:
-                    if result is None:
-                        status = STATUS.sent
-                        message = ''
-                        exception_type = ''
-                    else:
-                        if commit:
-                            status = STATUS.failed
-                            message = 'Sending failed without an exception.'
-                            exception_type = ''
-                            logger.exception('Failed to send email without exception')
-                        else:
-                            raise RuntimeError('Failed to send email without exception')
+                    raise
             else:
-                try:
-                    result = mail.send()
-                except Exception as e:
+                if result == 1 or result is None:  # regular mail and Microsoft return 1; EWS returns None
+                    status = STATUS.sent
+                    message = ''
+                    exception_type = ''
+                else:
                     if commit:
                         status = STATUS.failed
-                        message = str(e)
-                        exception_type = type(e).__name__
-                        logger.exception('Failed to send email')
-                    else:
-                        raise
-                else:
-                    if result == 1:
-                        status = STATUS.sent
-                        message = ''
+                        message = 'Sending failed without an exception.'
                         exception_type = ''
+                        logger.exception('Failed to send email without exception')
                     else:
-                        if commit:
-                            status = STATUS.failed
-                            message = 'Sending failed without an exception.'
-                            exception_type = ''
-                            logger.exception('Failed to send email without exception')
-                        else:
-                            raise RuntimeError('Failed to send email without exception')
+                        raise RuntimeError('Failed to send email without exception')
 
         if disconnect_after_delivery:
             connections.close()
