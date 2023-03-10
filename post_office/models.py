@@ -209,8 +209,11 @@ class Email(models.Model):
                         att.is_inline = True
                         att.content_id = match.group(1)
                 for attachment in self.attachments.all():
-                    path = os.path.join(settings.MEDIA_ROOT, attachment.file.name)  # should be the relative path
-                    msg.attachments.add([(path, attachment.name)])  # must add as a list of tuples to add a custom name
+                    try:
+                        path = os.path.join(settings.MEDIA_ROOT, attachment.file.name)  # should be the relative path
+                        msg.attachments.add([(path, attachment.name)])  # must add as a list of tuples to add a custom name
+                    except Exception as e:
+                        self.logs.create(status=STATUS.failed, message='Error adding attachment %s: %s' % (attachment.name, str(e)), exception_type=type(e).__name__)
 
             elif sender.auth.host_service == EWS_PASS:
                 # connection will be an exchangelib Account object
@@ -240,10 +243,13 @@ class Email(models.Model):
                     msg.save()
 
                 for attachment in self.attachments.all():
-                    path = os.path.join(settings.MEDIA_ROOT, attachment.file.name)
-                    binary_file_content = default_storage.open(path).read()
-                    file = FileAttachment(name=attachment.name, content=binary_file_content)
-                    msg.attach(file)
+                    try:
+                        path = os.path.join(settings.MEDIA_ROOT, attachment.file.name)
+                        binary_file_content = default_storage.open(path).read()
+                        file = FileAttachment(name=attachment.name, content=binary_file_content)
+                        msg.attach(file)
+                    except Exception as e:
+                        self.logs.create(status=STATUS.failed, message='Error adding attachment %s: %s' % (attachment.name, str(e)), exception_type=type(e).__name__)
 
             elif sender.auth.host_service == GOOGLE:
                 msg = None
@@ -275,18 +281,21 @@ class Email(models.Model):
                 msg.connection = connection
 
             for attachment in self.attachments.all():
-                if attachment.headers:
-                    mime_part = MIMENonMultipart(*attachment.mimetype.split('/'))
-                    mime_part.set_payload(attachment.file.read())
-                    for key, val in attachment.headers.items():
-                        try:
-                            mime_part.replace_header(key, val)
-                        except KeyError:
-                            mime_part.add_header(key, val)
-                    msg.attach(mime_part)
-                else:
-                    msg.attach(attachment.name, attachment.file.read(), mimetype=attachment.mimetype or None)
-                attachment.file.close()
+                try:
+                    if attachment.headers:
+                        mime_part = MIMENonMultipart(*attachment.mimetype.split('/'))
+                        mime_part.set_payload(attachment.file.read())
+                        for key, val in attachment.headers.items():
+                            try:
+                                mime_part.replace_header(key, val)
+                            except KeyError:
+                                mime_part.add_header(key, val)
+                        msg.attach(mime_part)
+                    else:
+                        msg.attach(attachment.name, attachment.file.read(), mimetype=attachment.mimetype or None)
+                    attachment.file.close()
+                except Exception as e:
+                    self.logs.create(status=STATUS.failed, message='Error adding attachment %s: %s' % (attachment.name, str(e)), exception_type=type(e).__name__)
 
         self._cached_email_message = msg
         return msg
