@@ -14,6 +14,7 @@ from django.utils.translation import pgettext_lazy, gettext_lazy as _
 from django.utils import timezone
 from jsonfield import JSONField
 from django.core.files.storage import default_storage
+from io import BytesIO
 
 from exchangelib import HTMLBody, Message as EWSMessage, ExtendedProperty, FileAttachment
 
@@ -204,14 +205,16 @@ class Email(models.Model):
                     # todo check that the cid we have found is the logo itself?
                     match = re.search(r'src="cid:([a-zA-Z0-9]*)"', html_message)
                     if match:
-                        msg.attachments.add(logo_path)
-                        att = msg.attachments[0]
-                        att.is_inline = True
-                        att.content_id = match.group(1)
+                        with default_storage.open(logo_path, mode="r") as logo_content:
+                            msg.attachments.add(BytesIO(logo_content.read()))
+                            att = msg.attachments[0]
+                            att.is_inline = True
+                            att.content_id = match.group(1)
                 for attachment in self.attachments.all():
                     try:
                         path = os.path.join(settings.MEDIA_ROOT, attachment.file.name)  # should be the relative path
-                        msg.attachments.add([(path, attachment.name)])  # must add as a list of tuples to add a custom name
+                        with default_storage.open(path, mode="r") as content:
+                            msg.attachments.add([(BytesIO(content.read()), attachment.name)])  # must add as a list of tuples to add a custom name
                     except Exception as e:
                         self.logs.create(status=STATUS.failed, message='Error adding attachment %s: %s' % (attachment.name, str(e)), exception_type=type(e).__name__)
 
