@@ -231,7 +231,7 @@ class Email(models.Model):
                     account=connection,
                     folder=connection.sent,  # saves email to this folder
                     subject=subject,
-                    body=HTMLBody(html_message) if html_message else plaintext_message,
+                    body=plaintext_message,
                     to_recipients=self.to,
                     cc_recipients=self.cc,
                     bcc_recipients=self.bcc,
