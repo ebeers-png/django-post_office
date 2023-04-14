@@ -12,5 +12,5 @@ class PostOfficeConfig(AppConfig):
         from post_office.settings import get_celery_enabled
         from post_office.signals import email_queued
 
-        if get_celery_enabled():
-            email_queued.connect(tasks.queued_mail_handler)
+        # if get_celery_enabled():
+        #    email_queued.connect(tasks.queued_mail_handler)
