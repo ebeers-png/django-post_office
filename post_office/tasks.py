@@ -37,10 +37,12 @@ else:
         Trigger an asynchronous mail delivery.
         """
         send_queued_mail.delay()
-
+    """
+    # todo temporarily removing from production
     @shared_task(ignore_result=True)
     def cleanup_mail(*args, **kwargs):
         days = kwargs.get('days', 90)
         cutoff_date = now() - datetime.timedelta(days)
         delete_attachments = kwargs.get('delete_attachments', True)
         cleanup_expired_mails(cutoff_date, delete_attachments)
+    """
