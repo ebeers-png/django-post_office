@@ -284,14 +284,17 @@ class EmailTemplateInline(admin.StackedInline):
 
 class EmailTemplateAdmin(admin.ModelAdmin):
     form = EmailTemplateAdminForm
-    list_display = ('name', 'description_shortened', 'subject', 'languages_compact', 'created')
+    list_display = ('id', 'organization', 'name', 'subject', 'languages_compact', 'created')
     search_fields = ('name', 'description', 'subject')
+    list_filter = ['organization']
+    list_display_links = ['name']
+    readonly_fields = ['organization', 'tag_mappings']
     fieldsets = [
         (None, {
-            'fields': ('name', 'description'),
+            'fields': ('name', 'organization', 'description'),
         }),
         (_("Default Content"), {
-            'fields': ('subject', 'content', 'html_content'),
+            'fields': ('subject', 'content', 'html_content', 'tag_mappings'),
         }),
     ]
     inlines = (EmailTemplateInline,) if settings.USE_I18N else ()
