@@ -15,7 +15,7 @@ from django.utils import timezone
 from jsonfield import JSONField
 from django.core.files.storage import default_storage
 
-from exchangelib import HTMLBody, Message as EWSMessage, ExtendedProperty, FileAttachment
+from exchangelib import HTMLBody, Message as ExchangeMessage, ExtendedProperty, FileAttachment
 
 from post_office import cache
 from post_office.fields import CommaSeparatedEmailField
@@ -145,7 +145,7 @@ class Email(models.Model):
         depending on whether html_message is empty.
         Returns a O365 Message object is account is set.
         """
-        from seed.models.email_settings import MICROSOFT, GOOGLE, EWS_PASS
+        from seed.models.email_settings import MICROSOFT, GOOGLE, EXCHANGE_PASS, EXCHANGE_OAUTH
 
         if get_override_recipients():
             self.to = get_override_recipients()
@@ -176,7 +176,7 @@ class Email(models.Model):
         msg = None
         sender = self.organization.sender
         if sender.auth and connection:
-            if sender.auth.host_service == MICROSOFT:
+            if sender.auth.host_service == MICROSOFT or sender.auth.host_service == EXCHANGE_OAUTH:
                 # connection will be a python-o365 Account object
                 # msg will be a python-o365 Message object
                 msg = connection.new_message(resource=sender.email_address)
@@ -215,19 +215,19 @@ class Email(models.Model):
                     except Exception as e:
                         self.logs.create(status=STATUS.failed, message='Error adding attachment %s: %s' % (attachment.name, str(e)), exception_type=type(e).__name__)
 
-            elif sender.auth.host_service == EWS_PASS:
+            elif sender.auth.host_service == EXCHANGE_PASS:
                 # connection will be an exchangelib Account object
-                # msg will be an exchangelib Message (EWSMessage) object
+                # msg will be an exchangelib Message (ExchangeMessage) object
 
-                # in EWS, must register the header before using it as a field
+                # in Exchange, must register the header before using it as a field
                 # https://web.archive.org/web/20221204210117/https://mellositmusings.com/2018/12/23/sending-an-email-with-x-headers-in-ews-via-powershell/
-                if 'beam_header' not in EWSMessage.supported_fields(connection.version):
+                if 'beam_header' not in ExchangeMessage.supported_fields(connection.version):
                     # not sure how to create class we can use for multiple headers... only usable with X-BEAMHelpdesk-Delivered for now
-                    EWSMessage.register(attr_name="beam_header", attr_cls=BEAMHeader)
-                    if 'beam_header' not in EWSMessage.supported_fields(connection.version):
-                        logger.error("Could not register BEAM header in EWS.")
+                    ExchangeMessage.register(attr_name="beam_header", attr_cls=BEAMHeader)
+                    if 'beam_header' not in ExchangeMessage.supported_fields(connection.version):
+                        logger.error("Could not register BEAM header in Exchange.")
 
-                msg = EWSMessage(
+                msg = ExchangeMessage(
                     account=connection,
                     folder=connection.sent,  # saves email to this folder
                     subject=subject,
@@ -238,7 +238,7 @@ class Email(models.Model):
                 )
                 msg.save()
 
-                if 'X-BEAMHelpdesk-Delivered' in headers and 'beam_header' in EWSMessage.supported_fields(connection.version):
+                if 'X-BEAMHelpdesk-Delivered' in headers and 'beam_header' in ExchangeMessage.supported_fields(connection.version):
                     msg.beam_header = headers['X-BEAMHelpdesk-Delivered']
                     msg.save()
 
@@ -328,7 +328,7 @@ class Email(models.Model):
                 else:
                     raise
             else:
-                if result == 1 or result is None:  # regular mail and Microsoft return 1; EWS returns None
+                if result == 1 or result is None:  # regular mail and Microsoft return 1; Exchange returns None
                     status = STATUS.sent
                     message = ''
                     exception_type = ''
