@@ -48,7 +48,7 @@ setup(
     include_package_data=True,
     package_data={'': ['README.rst']},
     install_requires=[
-        'bleach[css]==4.1.0',
+        'bleach[css]==6.0.0',
         'django>=2.2',
         'jsonfield>=3.0',
         'pytz',
@@ -73,7 +73,7 @@ setup(
     tests_require=TESTS_REQUIRE,
     extras_require={
         'test': TESTS_REQUIRE,
-        'prevent-XSS': ['bleach==4.1.0'],
+        'prevent-XSS': ['bleach==6.0.0'],
     },
     cmdclass={'test': Tox}
 )
