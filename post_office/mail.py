@@ -399,21 +399,22 @@ def _send_bulk(emails, uses_multiprocessing=True, log_level=None, organization=N
 def send_queued_mail_until_done(lockfile=default_lockfile, processes=1, log_level=None):
     """
     Send mail in queue batch by batch, until all emails have been processed.
+    Updated to only send one batch at a time.
     """
     try:
         with FileLock(lockfile):
             logger.info('Acquired lock for sending queued emails at %s.lock', lockfile)
-            while True:
-                try:
-                    send_queued(processes, log_level)
-                except Exception as e:
-                    logger.exception(e, extra={'status_code': 500})
-                    raise
+            # while True:
+            try:
+                send_queued(processes, log_level)
+            except Exception as e:
+                logger.exception(e, extra={'status_code': 500})
+                raise
 
-                # Close DB connection to avoid multiprocessing errors
-                db_connection.close()
+            # Close DB connection to avoid multiprocessing errors
+            db_connection.close()
 
-                if not get_queued().exists():
-                    break
+            # if not get_queued().exists():
+            #     break
     except FileLocked:
         logger.info('Failed to acquire lock, terminating now.')
