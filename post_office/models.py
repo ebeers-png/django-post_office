@@ -238,7 +238,7 @@ class Email(models.Model):
                 )
                 msg.save()
 
-                if 'X-BEAMHelpdesk-Delivered' in headers and 'beam_header' in ExchangeMessage.supported_fields(connection.version):
+                if headers and 'X-BEAMHelpdesk-Delivered' in headers and 'beam_header' in ExchangeMessage.supported_fields(connection.version):
                     msg.beam_header = headers['X-BEAMHelpdesk-Delivered']
                     msg.save()
 
