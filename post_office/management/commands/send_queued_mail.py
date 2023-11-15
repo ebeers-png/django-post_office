@@ -22,6 +22,11 @@ class Command(BaseCommand):
             type=int,
             help='"0" to log nothing, "1" to only log errors',
         )
+        parser.add_argument(
+            '--ignore-slow',
+            required=False,
+            action='store_true',
+        )
 
     def handle(self, *args, **options):
-        send_queued_mail_until_done(options['lockfile'], options['processes'], options.get('log_level'))
+        send_queued_mail_until_done(options['lockfile'], options['processes'], options.get('log_level'), ignore_slow=options.get('ignore_slow', False))

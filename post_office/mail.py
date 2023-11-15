@@ -24,7 +24,8 @@ from .utils import (
 )
 
 from seed.lib.superperms.orgs.models import Organization
-from seed.utils.email import setup_basic_backend
+from helpdesk.models import Ticket
+from seed.utils.email import setup_basic_backend, add_custom_header
 
 logger = setup_loghandlers("INFO")
 
@@ -222,10 +223,10 @@ def get_queued(organization=None):
 
     return Email.objects.filter(query) \
                 .select_related('template') \
-                .order_by(*get_sending_order()).prefetch_related('attachments')[:get_batch_size()]
+                .order_by(*get_sending_order()).prefetch_related('attachments')
 
 
-def send_queued(processes=1, log_level=None):
+def send_queued(processes=1, log_level=None, ignore_slow=False):
     """
     Sends out all queued mails that has scheduled_time less than now or None
     """
@@ -233,10 +234,115 @@ def send_queued(processes=1, log_level=None):
     orgs = Organization.objects.all()
     queued_emails_by_org = {}
     for org in orgs:
-        queued = get_queued(organization=org)
-        if queued:
+        queued_unsliced = get_queued(organization=org)
+        queued = []
+        if queued_unsliced:
+            if org.email_slow_mode and not ignore_slow:
+                if queued_unsliced.filter(source_page=Email.HELPDESK).exists():
+                    logger.info(f'Sending for {org} in slow mode.')
+                    queued += queued_unsliced.exclude(source_page=Email.HELPDESK)[:get_batch_size() - 1]
+                    queued += queued_unsliced.filter(source_page=Email.HELPDESK)[:1]
+                else:
+                    logger.info(f'Turning off slow mode for {org}')
+                    queued = queued_unsliced[:get_batch_size()]
+                    org.email_slow_mode = False
+                    org.save()
+            else:
+                helpdesk_mail = queued_unsliced.filter(source_page=Email.HELPDESK)
+                if ignore_slow or helpdesk_mail.count() < 40:
+                    queued = queued_unsliced[:get_batch_size()]
+                else:
+                    logger.info(f'Turning on slow mode for {org}')
+                    # that's a lot of mail. start sending in slow mode
+                    org.email_slow_mode = True
+                    org.save()
+
+                    # put together list of emails to send slowly
+                    queued += queued_unsliced.exclude(source_page=Email.HELPDESK)[:get_batch_size() - 1]
+                    queued += helpdesk_mail[:1]
+
+                    # create alert email
+                    # todo: add in other users
+
+                    # cc = {'ebeers@clearlyenergy.com', 'vbugnion@clearlyenergy.com'}
+                    hd_list_plain = ""
+                    hd_list_html = "<ul>\n"
+                    for ticket in Ticket.objects.filter(emails__in=helpdesk_mail).distinct():
+                        # if ticket.assigned_to:
+                        #     cc.add(ticket.assigned_to.email)
+                        hd_list_plain += f'- {ticket.emails.count()} email(s): [{ticket.queue.slug}-{ticket.id}] {ticket.title}\n'
+                        hd_list_html += f'<li>{ticket.emails.count()} email(s): <a href="{ticket.staff_url}">[{ticket.queue.slug}-{ticket.id}] {ticket.title}</a></li>\n'
+                    hd_list_html += "</ul>"
+
+                    msg_plain = (
+                        'Helpdesk has detected that an unusually large amount of emails have been queued to send, and has automatically turned on "slow mode." '
+                        'In slow mode, Helpdesk will send mail at a rate of one email every five minutes. '
+                        'Slow mode will automatically turn off once there are no more queued Helpdesk emails.\n\n'
+                        'The following tickets currently have queued mail:\n\n'
+                        f'{hd_list_plain}\n'
+                        "If individual tickets are creating a large volume of mail, the ticket may be causing an email loop, or it may have too many CC'd addresses. "
+                        'Here are some solutions:\n\n'
+                        '- Do not delete the ticket.\n'
+                        "- Go to the ticket's page and toggle the red button at the top, \"Disable Email Notifications.\" "
+                            "This will delete any queued emails created by that ticket and prevent them from sending, and it will prevent the ticket from creating and sending out future emails. "
+                            "Imports will still be allowed.\n"
+                        "- Look at the list of CC'd email addresses, and remove any that are causing issues or should not be on the ticket. "
+                            "As new imports come in, you will need to re-check the list of CC'd addresses.\n\n"
+                            "If the issue is that too many new tickets are being created, here are some solutions:\n\n"
+                        "- Do not delete the ticket.\n"
+                        "- Look at the submitter of the tickets, and add their email address to the list of Ignored Addresses. "
+                            "If they're already on the list, double-check that both sending and importing are blocked for that address.\n"
+                        "- If the tickets are being created by forms, set the forms to staff-only and ensure they're not unlisted.\n\n"
+                        "If you take any steps to solve the issue, please reply-all to this email with those steps. "
+                        "Alternatively, if this email was a false alarm, please reply-all and let ClearlyEnergy know so that we can manually turn off slow mode."
+                    )
+                    msg_html = (
+                        '<p>Helpdesk has detected that an unusually large amount of emails have been queued to send, and has automatically turned on "slow mode." '
+                        'In slow mode, Helpdesk will send mail at a rate of one email every five minutes. '
+                        'Slow mode will automatically turn off once there are no more queued Helpdesk emails.</p>'
+                        '<p>The following tickets currently have queued mail:</p>'
+                        f'{hd_list_html}'
+                        "<p>If individual tickets are creating a large volume of mail, the ticket may be causing an email loop, or it may have too many CC'd addresses. "
+                        'Here are some solutions:</p>'
+                        '<ul>'
+                        '<li>Do not delete the ticket.</li>'
+                        "<li>Go to the ticket's page and toggle the red button at the top, \"Disable Email Notifications.\" "
+                            "This will delete any queued emails created by that ticket and prevent them from sending, and it will prevent the ticket from creating and sending out future emails. "
+                            "Imports will still be allowed.</li>"
+                        "<li>Look at the list of CC'd email addresses, and remove any that are causing issues or should not be on the ticket. "
+                            "As new imports come in, you will need to re-check the list of CC'd addresses.</li>"
+                        '</ul>'
+                        "<p>If the issue is that too many new tickets are being created, here are some solutions:</p>"
+                        '<ul>'
+                        "<li>Do not delete the ticket.</li>"
+                        "<li>Look at the submitter of the tickets, and add their email address to the list of Ignored Addresses. "
+                            "If they're already on the list, double-check that both sending and importing are blocked for that address.</li>"
+                        "<li>If the tickets are being created by forms, set the forms to staff-only and ensure they're not unlisted.</li>"
+                        '</ul>'
+                        "<p>If you take any steps to solve the issue, please reply-all to this email with those steps. "
+                        "Alternatively, if this email was a false alarm, please reply-all and let ClearlyEnergy know so that we can manually turn off slow mode.</p>"
+                    )
+                    # create email object for alert email and add it to the emails that should be sent out right now
+
+                    # _, beam_header = add_custom_header(list(cc))
+                    log_mail = send(
+                        recipients=['beammonitoring@gmail.com'],
+                        sender=org.sender.email_address,
+                        subject=f'IMPORTANT: Helpdesk email overflow detected',
+                        message=msg_plain,
+                        html_message=msg_html,
+                        organization=org,
+                        source_page=Email.SCRIPT,
+                        source_action='email reports',
+                        # headers={'X-BEAMHelpdesk-Delivered': beam_header},
+                    )
+                    queued.append(log_mail)
+
             queued_emails_by_org[org] = queued
             total_email += len(queued)
+        elif org.email_slow_mode:
+            org.email_slow_mode = False
+            org.save()
 
     logger.info('Started sending %s emails with %s processes.' %
                 (total_email, processes))
@@ -395,8 +501,7 @@ def _send_bulk(emails, uses_multiprocessing=True, log_level=None, organization=N
 
     return len(sent_emails), num_failed, num_requeued
 
-
-def send_queued_mail_until_done(lockfile=default_lockfile, processes=1, log_level=None):
+def send_queued_mail_until_done(lockfile=default_lockfile, processes=1, log_level=None, ignore_slow=False):
     """
     Send mail in queue batch by batch, until all emails have been processed.
     Updated to only send one batch at a time.
@@ -406,7 +511,7 @@ def send_queued_mail_until_done(lockfile=default_lockfile, processes=1, log_leve
             logger.info('Acquired lock for sending queued emails at %s.lock', lockfile)
             # while True:
             try:
-                send_queued(processes, log_level)
+                send_queued(processes, log_level, ignore_slow=ignore_slow)
             except Exception as e:
                 logger.exception(e, extra={'status_code': 500})
                 raise
