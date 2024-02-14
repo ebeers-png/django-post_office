@@ -29,6 +29,10 @@ from seed.landing.models import SEEDUser as User
 from seed.lib.superperms.orgs.models import Organization
 from seed.utils.strings import check_if_context_appropriate
 
+import base64
+from email.message import EmailMessage as GoogleEmailMessage
+from email.contentmanager import raw_data_manager
+from mimetypes import guess_type
 
 logger = setup_loghandlers("INFO")
 
@@ -252,7 +256,46 @@ class Email(models.Model):
                         self.logs.create(status=STATUS.failed, message='Error adding attachment %s: %s' % (attachment.name, str(e)), exception_type=type(e).__name__)
 
             elif sender.auth.host_service == GOOGLE:
-                msg = None
+                message = GoogleEmailMessage()
+                raw_data_manager.set_content(message, plaintext_message, subtype='plain')
+                raw_data_manager.set_content(message, html_message, subtype='html')
+
+                message["To"] = self.to
+                message["From"] = self.from_email
+                message["Subject"] = subject
+
+                if headers and 'X-BEAMHelpdesk-Delivered' in headers:
+                    message.add_header('X-BEAMHelpdesk-Delivered', headers['X-BEAMHelpdesk-Delivered'])
+
+                for attachment in self.attachments.all():
+                    try:
+                        # code from the email examples library https://docs.python.org/3/library/email.examples.html
+                        path = os.path.join(settings.MEDIA_ROOT, attachment.file.name)  # should be the relative path
+                        if not os.path.isfile(path):
+                            continue
+                            # Guess the content type based on the file's extension.  Encoding
+                            # will be ignored, although we should check for simple things like
+                            # gzip'd or compressed files.
+                        ctype, encoding = guess_type(path)
+                        if ctype is None or encoding is not None:
+                            # No guess could be made, or the file is encoded (compressed), so
+                            # use a generic bag-of-bits type.
+                            ctype = 'application/octet-stream'
+                        maintype, subtype = ctype.split('/', 1)
+                        with open(path, 'rb') as fp:
+                            message.add_attachment(
+                                fp.read(),
+                                maintype=maintype,
+                                subtype=subtype,
+                                filename=attachment.name)
+                    except Exception as e:
+                        self.logs.create(status=STATUS.failed,
+                                         message='Error adding attachment %s: %s' % (attachment.name, str(e)),
+                                         exception_type=type(e).__name__)
+
+                encoded_message = base64.urlsafe_b64encode(message.as_bytes()).decode()
+                msg = {"connection": connection, "raw": encoded_message}
+
             else:
                 msg = None
         if not msg:
@@ -306,7 +349,7 @@ class Email(models.Model):
         Sends email and log the result.
         """
         try:
-            mail = self.email_message()
+            mail = self.email_message()  # returns what was already prepared by prepare_email_message(connection=connection)
         except Exception:
             if commit:
                 status = STATUS.failed
@@ -317,29 +360,50 @@ class Email(models.Model):
                 # If run in a bulk sending mode, re-raise and let the outer layer handle the exception
                 raise
         else:
-            try:
-                result = mail.send()
-            except Exception as e:
-                if commit:
-                    status = STATUS.failed
-                    message = str(e)
-                    exception_type = type(e).__name__
-                    logger.exception('Failed to send email')
+            if type(mail) is dict:  # Google
+                try:
+                    send_message = (
+                        mail['connection'].users()
+                        .messages()
+                        .send(userId="me", body={'raw': mail['raw']})
+                        .execute()
+                    )
+                except Exception as e:
+                    if commit:
+                        status = STATUS.failed
+                        message = str(e)
+                        exception_type = type(e).__name__
+                        logger.exception('Failed to send email')
+                    else:
+                        raise
                 else:
-                    raise
-            else:
-                if result == 1 or result is None:  # regular mail and Microsoft return 1; Exchange returns None
                     status = STATUS.sent
                     message = ''
                     exception_type = ''
-                else:
+            else:  # Everything that's not Google
+                try:
+                    result = mail.send()
+                except Exception as e:
                     if commit:
                         status = STATUS.failed
-                        message = 'Sending failed without an exception.'
-                        exception_type = ''
-                        logger.exception('Failed to send email without exception')
+                        message = str(e)
+                        exception_type = type(e).__name__
+                        logger.exception('Failed to send email')
                     else:
-                        raise RuntimeError('Failed to send email without exception')
+                        raise
+                else:
+                    if result == 1 or result is None:  # regular mail and Microsoft return 1; Exchange returns None
+                        status = STATUS.sent
+                        message = ''
+                        exception_type = ''
+                    else:
+                        if commit:
+                            status = STATUS.failed
+                            message = 'Sending failed without an exception.'
+                            exception_type = ''
+                            logger.exception('Failed to send email without exception')
+                        else:
+                            raise RuntimeError('Failed to send email without exception')
 
         if disconnect_after_delivery:
             connections.close()
