@@ -10,6 +10,9 @@ from email.utils import make_msgid
 from multiprocessing import Pool
 from multiprocessing.dummy import Pool as ThreadPool
 
+from google_auth_httplib2 import AuthorizedHttp
+from httplib2 import Http
+
 from .connections import connections
 from .lockfile import default_lockfile, FileLock, FileLocked
 from .logutils import setup_loghandlers
@@ -391,6 +394,9 @@ def _send_bulk(emails, uses_multiprocessing=True, log_level=None, organization=N
     # Multiprocessing does not play well with database connection
     # Fix: Close connections on forking process
     # https://groups.google.com/forum/#!topic/django-users/eCAIY9DAfG0
+    # The Google API we use for credentials uses httplib2, which isn't thread-safe
+    # Fix: Create an http object for each thread https://googleapis.github.io/google-api-python-client/docs/thread_safety.html
+    # Future todo: Update google.oauth2.credentials to googleapiclient, which doesn't use httplib2
     if uses_multiprocessing:
         db_connection.close()
 
@@ -403,16 +409,6 @@ def _send_bulk(emails, uses_multiprocessing=True, log_level=None, organization=N
 
     logger.info('Process started, sending %s emails' % email_count)
 
-    def send(email):
-        try:
-            email.dispatch(log_level=log_level, commit=False,
-                           disconnect_after_delivery=False)
-            sent_emails.append(email)
-            logger.debug('Successfully sent email #%d' % email.id)
-        except Exception as e:
-            logger.exception('Failed to send email #%d' % email.id)
-            failed_emails.append((email, e))
-
     # set up backend
     sender = organization.sender
     if not sender:
@@ -423,8 +419,19 @@ def _send_bulk(emails, uses_multiprocessing=True, log_level=None, organization=N
         connection, error = sender.auth.login(logger=logger, email=sender)
         if error:
             return error
+        google_credentials = sender.auth.get_google_credentials()
     else:
         connection = setup_basic_backend(None, sender=sender)
+
+    def send(email):
+        http = AuthorizedHttp(google_credentials, http=Http())
+        try:
+            email.dispatch(log_level=log_level, commit=False, disconnect_after_delivery=False, http=http)
+            sent_emails.append(email)
+            logger.debug('Successfully sent email #%d' % email.id)
+        except Exception as e:
+            logger.exception('Failed to send email #%d' % email.id)
+            failed_emails.append((email, e))
 
     # Prepare emails before we send these to threads for sending
     # So we don't need to access the DB from within threads

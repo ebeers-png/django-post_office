@@ -343,8 +343,7 @@ class Email(models.Model):
         self._cached_email_message = msg
         return msg
 
-    def dispatch(self, log_level=None,
-                 disconnect_after_delivery=True, commit=True):
+    def dispatch(self, log_level=None, disconnect_after_delivery=True, commit=True, http=None):
         """
         Sends email and log the result.
         """
@@ -366,7 +365,7 @@ class Email(models.Model):
                         mail['connection'].users()
                         .messages()
                         .send(userId="me", body={'raw': mail['raw']})
-                        .execute()
+                        .execute(http=http) # fix for lack of multithreading support
                     )
                 except Exception as e:
                     if commit:
