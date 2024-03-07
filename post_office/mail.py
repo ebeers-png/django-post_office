@@ -411,6 +411,7 @@ def _send_bulk(emails, uses_multiprocessing=True, log_level=None, organization=N
 
     # set up backend
     sender = organization.sender
+    google_credentials = None
     if not sender:
         logger.exception('Emails could not be sent, exiting process')
         return 0, 0, 0
@@ -424,7 +425,9 @@ def _send_bulk(emails, uses_multiprocessing=True, log_level=None, organization=N
         connection = setup_basic_backend(None, sender=sender)
 
     def send(email):
-        http = AuthorizedHttp(google_credentials, http=Http())
+        http = None
+        if google_credentials:
+            http = AuthorizedHttp(google_credentials, http=Http())
         try:
             email.dispatch(log_level=log_level, commit=False, disconnect_after_delivery=False, http=http)
             sent_emails.append(email)
