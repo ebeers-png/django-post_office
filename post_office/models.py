@@ -267,6 +267,29 @@ class Email(models.Model):
                 if headers and 'X-BEAMHelpdesk-Delivered' in headers:
                     message.add_header('X-BEAMHelpdesk-Delivered', headers['X-BEAMHelpdesk-Delivered'])
 
+                # Add an inline logo header.
+                if self.template and self.template.use_logo_header:
+                    try:
+                        logo_path = os.path.join(settings.MEDIA_ROOT, self.organization.logo.filename())
+                        file_name = os.path.basename(logo_path)
+                        match = re.search(r'src="cid:([a-zA-Z0-9]*)"', html_message)
+                        if match:
+                            ctype, encoding = guess_type(logo_path)
+                            if ctype is None or encoding is not None:
+                                ctype = 'application/octet-stream'
+                            maintype, subtype = ctype.split('/', 1)
+                            with open(logo_path, 'rb') as img:
+                                message.add_attachment(
+                                    img.read(),
+                                    maintype=maintype,
+                                    subtype=subtype,
+                                    cid=match.group(1),
+                                    filename=file_name)
+                    except Exception as e:
+                        self.logs.create(status=STATUS.failed,
+                                         message='Error adding template inline logo attachment: %s' % (str(e)),
+                                         exception_type=type(e).__name__)
+
                 for attachment in self.attachments.all():
                     try:
                         # code from the email examples library https://docs.python.org/3/library/email.examples.html
