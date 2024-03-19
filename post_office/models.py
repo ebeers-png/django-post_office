@@ -258,7 +258,8 @@ class Email(models.Model):
             elif sender.auth.host_service == GOOGLE:
                 message = GoogleEmailMessage()
                 raw_data_manager.set_content(message, plaintext_message, subtype='plain')
-                raw_data_manager.set_content(message, html_message, subtype='html')
+                if html_message:
+                    raw_data_manager.set_content(message, html_message, subtype='html')
 
                 message["To"] = self.to
                 message["From"] = self.from_email
