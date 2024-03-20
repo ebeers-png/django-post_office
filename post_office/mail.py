@@ -6,6 +6,7 @@ from django.db import connection as db_connection
 from django.db.models import Q
 from django.template import Context, Template
 from django.utils import timezone
+from datetime import timedelta
 from email.utils import make_msgid
 from multiprocessing import Pool
 from multiprocessing.dummy import Pool as ThreadPool
@@ -233,7 +234,10 @@ def send_queued(processes=1, log_level=None, ignore_slow=False):
     """
     Sends out all queued mails that has scheduled_time less than now or None
     """
+    from seed.models import GOOGLE
     total_sent, total_failed, total_requeued, total_email = 0, 0, 0, 0
+    gmail_limit = 2000 - 1  # https://support.google.com/a/answer/166852?hl=en&fl=1&sjid=577582152286187260-NC
+    date = timezone.now() - timedelta(days=1)
     orgs = Organization.objects.all()
     queued_emails_by_org = {}
     for org in orgs:
@@ -340,6 +344,12 @@ def send_queued(processes=1, log_level=None, ignore_slow=False):
                         # headers={'X-BEAMHelpdesk-Delivered': beam_header},
                     )
                     queued.append(log_mail)
+            if org.sender.auth and org.sender.auth.host_service == GOOGLE:
+                # paid Google accounts have a limit of 2000 sent emails in a 24-hour period
+                logger.info(f'Original batch size for org {org.id}: {len(queued)}')
+                daily_total = Log.objects.filter(status=STATUS.sent, date__gte=date, email__organization=org).count()
+                queued = queued[:(gmail_limit - daily_total)] if daily_total <= gmail_limit else 0
+                logger.info(f'Will send: {len(queued)}')
 
             queued_emails_by_org[org] = queued
             total_email += len(queued)
@@ -347,8 +357,7 @@ def send_queued(processes=1, log_level=None, ignore_slow=False):
             org.email_slow_mode = False
             org.save()
 
-    logger.info('Started sending %s emails with %s processes.' %
-                (total_email, processes))
+    logger.info('Started sending %s emails with %s processes.' % (total_email, processes))
 
     if log_level is None:
         log_level = get_log_level()
