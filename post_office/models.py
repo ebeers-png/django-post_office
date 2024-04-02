@@ -556,7 +556,7 @@ class EmailTemplate(models.Model):
         tag_mappings = {v: k for k, v in self.tag_mappings.items()}
         matches = []
         for match in re.findall(r'{{[ ]*[^} \n]*[ ]*}}', self.subject + self.content):
-            match = match.strip(' {}')
+            match = match.strip(' {}').removeprefix('data.')
             if match in tag_mappings:
                 match = tag_mappings[match]
             if match not in matches:
@@ -587,7 +587,7 @@ class EmailTemplate(models.Model):
         tag_mappings = {}
 
         for match in re.findall('{{[ ]*[^}\n]*[ ]*}}', subject + content):
-            match = match.strip(' {}')  # Remove starting and ending tags/spaces
+            match = match.strip(' {}').removeprefix('data.')  # Remove starting and ending tags/spaces
             if not check_if_context_appropriate(match) and match not in tag_mappings:
                 tag_mappings[match] = 'var' + str(counter)
                 counter += 1
@@ -611,7 +611,7 @@ class EmailTemplate(models.Model):
             if attr in data:
                 for k, v in tag_mappings.items():
                     data[attr] = re.sub(r'{{[ ]*' + re.escape(k) + r'[ ]*}}', '{{ ' + v + ' }}', data[attr])
-
+                    data[attr] = re.sub(r'{{[ ]*' + 'data.' + re.escape(k) + r'[ ]*}}', '{{ data.' + v + ' }}', data[attr])
         return data
 
     def __str__(self):
