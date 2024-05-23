@@ -17,7 +17,7 @@ from httplib2 import Http
 from .connections import connections
 from .lockfile import default_lockfile, FileLock, FileLocked
 from .logutils import setup_loghandlers
-from .models import Email, EmailTemplate, Log, PRIORITY, STATUS
+from post_office.models import Email, EmailTemplate, Log, PRIORITY, STATUS
 from .settings import (
     get_available_backends, get_batch_size, get_log_level, get_max_retries, get_message_id_enabled,
     get_message_id_fqdn, get_retry_timedelta, get_sending_order, get_threads_per_process, get_template_engine
@@ -277,8 +277,8 @@ def send_queued(processes=1, log_level=None, ignore_slow=False):
                     for ticket in Ticket.objects.filter(emails__in=helpdesk_mail).distinct():
                         # if ticket.assigned_to:
                         #     cc.add(ticket.assigned_to.email)
-                        hd_list_plain += f'- {ticket.emails.count()} email(s): [{ticket.queue.slug}-{ticket.id}] {ticket.title}\n'
-                        hd_list_html += f'<li>{ticket.emails.count()} email(s): <a href="{ticket.staff_url}">[{ticket.queue.slug}-{ticket.id}] {ticket.title}</a></li>\n'
+                        hd_list_plain += f'- {ticket.emails.filter(status=STATUS.queued).count()} email(s): [{ticket.queue.slug}-{ticket.id}] {ticket.title}\n'
+                        hd_list_html += f'<li>{ticket.emails.filter(status=STATUS.queued).count()} email(s): <a href="{ticket.staff_url}">[{ticket.queue.slug}-{ticket.id}] {ticket.title}</a></li>\n'
                     hd_list_html += "</ul>"
 
                     msg_plain = (
