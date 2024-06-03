@@ -211,7 +211,7 @@ def send_many(kwargs_list):
         email_queued.send(sender=Email, emails=emails)
 
 
-def get_queued(organization=None):
+def get_queued(organization=None, extra_q=None):
     """
     Returns the queryset of emails eligible for sending – fulfilling these conditions:
      - Status is queued or requeued
@@ -226,11 +226,70 @@ def get_queued(organization=None):
     )
     if organization:
         query = query & (Q(organization=organization))
+    if extra_q:
+        query = query & extra_q
 
     return Email.objects.filter(query) \
                 .select_related('template') \
                 .order_by(*get_sending_order()).prefetch_related('attachments')
 
+def get_queued_for_google(org):
+    """
+    Google has a 2000 emails/day limit, but we don't want huge amounts of bulk emails to prevent other kinds of mail
+    from being sent. This method caps the amount of bulk mail and allows other kinds of mail to always be prioritized.
+    """
+    stagger = False # todo
+    gmail_limit = 2000 - 1  # https://support.google.com/a/answer/166852?hl=en&fl=1&sjid=577582152286187260-NC
+    priority_min = 300
+    priority_query = Q(priority__in=[PRIORITY.now, PRIORITY.high])  # todo or scheduled_time = now
+    log_priority_query = Q(email__priority__in=[PRIORITY.now, PRIORITY.high])
+
+    regular_limit = gmail_limit - priority_min
+    batch = get_batch_size()
+    date = timezone.now() - timedelta(days=1)
+
+    daily_sent = Log.objects.filter(
+        status=STATUS.sent,
+        date__gte=date,
+        email__organization=org
+    )
+    daily_left = gmail_limit - daily_sent.count()
+    logger.info(f'Emails sent today: {daily_sent.count()}')
+
+    # First, prioritize these emails and send as many of them as you can fit in the batch
+    priority_queued = get_queued(org, priority_query)
+    if daily_left < batch:
+        batch = daily_left
+    queued_list = priority_queued[:batch]
+    queued_count = queued_list.count()
+    logger.info(f'Sending {queued_count} priority emails')
+
+    # Next, check if there's any space left in the batch - if not, skip sending the other kinds of emails
+    batch_left = batch - queued_count
+    if batch_left == 0:
+        return queued_list
+
+    daily_priority_sent = daily_sent.filter(log_priority_query).count()
+    daily_regular_sent = daily_sent.filter(~log_priority_query).count()
+
+    # Get the rest of the emails
+    regular_queued = get_queued(org, ~priority_query)
+    # If more priority mail has been sent than the min number of priority emails, then we'll adjust the limit for regular mail
+    if daily_priority_sent + queued_count > priority_min:
+        regular_limit = gmail_limit - daily_priority_sent - len(queued_list)
+
+    # Based on the new limit for regular mail, how much can we send?
+    daily_regular_left = regular_limit - daily_regular_sent
+    # fill out the batch, or send up to the regular daily limit, whichever is smaller
+    regular_batch = batch_left if batch_left < daily_regular_left else daily_regular_left
+    # if stagger is on, send a smaller batch of the regular mail
+    if stagger and stagger < regular_batch:
+        regular_batch = stagger
+
+    queued_list = queued_list.union(regular_queued[:regular_batch])
+    logger.info(f'Sending {queued_list.count() - queued_count} regular emails')
+
+    return queued_list
 
 def send_queued(processes=1, log_level=None, ignore_slow=False):
     """
@@ -243,7 +302,10 @@ def send_queued(processes=1, log_level=None, ignore_slow=False):
     orgs = Organization.objects.all()
     queued_emails_by_org = {}
     for org in orgs:
-        queued_unsliced = get_queued(organization=org)
+        if org.sender.auth.host_service == GOOGLE:
+            queued_unsliced = get_queued_for_google(org)
+        else:
+            queued_unsliced = get_queued(organization=org)
         queued = []
         if queued_unsliced:
             if org.email_slow_mode and not ignore_slow:
@@ -346,12 +408,6 @@ def send_queued(processes=1, log_level=None, ignore_slow=False):
                         # headers={'X-BEAMHelpdesk-Delivered': beam_header},
                     )
                     queued.append(log_mail)
-            if org.sender.auth and org.sender.auth.host_service == GOOGLE:
-                # paid Google accounts have a limit of 2000 sent emails in a 24-hour period
-                logger.info(f'Original batch size for org {org.id}: {len(queued)}')
-                daily_total = Log.objects.filter(status=STATUS.sent, date__gte=date, email__organization=org).count()
-                queued = queued[:(gmail_limit - daily_total)] if daily_total <= gmail_limit else 0
-                logger.info(f'Will send: {len(queued)}')
 
             queued_emails_by_org[org] = queued
             total_email += len(queued)
