@@ -43,7 +43,7 @@ def create(sender, recipients=None, cc=None, bcc=None, subject='', message='',
     specified, email subject and content will be rendered during delivery.
     """
     priority = parse_priority(priority)
-    status = None if priority == PRIORITY.now else STATUS.queued
+    status = STATUS.queued # None if priority == PRIORITY.now else STATUS.queued
 
     if recipients is None:
         recipients = []
@@ -147,8 +147,8 @@ def send(recipients=None, sender=None, template=None, context=None, subject='',
         log_level = get_log_level()
 
     if not commit:
-        if priority == PRIORITY.now:
-            raise ValueError("send_many() can't be used with priority = 'now'")
+        # if priority == PRIORITY.now:
+        #     raise ValueError("send_many() can't be used with priority = 'now'")
         if attachments:
             raise ValueError("Can't add attachments with send_many()")
         if property_views or taxlot_views:
@@ -188,10 +188,12 @@ def send(recipients=None, sender=None, template=None, context=None, subject='',
     if taxlot_views:
         email.taxlot_views.set(taxlot_views)
 
+    """
     if priority == PRIORITY.now:
         # todo disabling this for now
         # email.dispatch(log_level=log_level)
         pass
+    """
     email_queued.send(sender=Email, emails=[email])
 
     return email

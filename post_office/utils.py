@@ -17,7 +17,7 @@ def send_mail(subject, message, from_email, recipient_list, html_message='',
     """
 
     subject = force_str(subject)
-    status = None if priority == PRIORITY.now else STATUS.queued
+    status = STATUS.queued # None if priority == PRIORITY.now else STATUS.queued
     emails = [
         Email.objects.create(
             from_email=from_email, to=address, subject=subject,
@@ -25,11 +25,11 @@ def send_mail(subject, message, from_email, recipient_list, html_message='',
             headers=headers, priority=priority, scheduled_time=scheduled_time
         ) for address in recipient_list
     ]
+    """
     if priority == PRIORITY.now:
         for email in emails:
-            # todo disabling this for now
-            # email.dispatch()
-            pass
+            email.dispatch()
+    """
     return emails
 
 
