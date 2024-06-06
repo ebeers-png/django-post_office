@@ -286,7 +286,8 @@ def get_queued_for_google(org):
     if stagger and stagger < regular_batch:
         regular_batch = stagger
 
-    queued_list = queued_list.union(regular_queued[:regular_batch])
+    regular_list = regular_queued[:regular_batch]
+    queued_list = Email.objects.filter(Q(id__in=queued_list) | Q(id__in=regular_list))
     logger.info(f'Sending {queued_list.count() - queued_count} regular emails')
 
     return queued_list
