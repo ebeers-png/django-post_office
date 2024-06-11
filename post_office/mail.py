@@ -267,7 +267,7 @@ def get_queued_for_google(org):
     # Next, check if there's any space left in the batch - if not, skip sending the other kinds of emails
     batch_left = batch - queued_count
     if batch_left == 0:
-        return queued_list
+        return Email.objects.filter(id__in=queued_list)
 
     daily_priority_sent = daily_sent.filter(log_priority_query).count()
     daily_regular_sent = daily_sent.filter(~log_priority_query).count()
