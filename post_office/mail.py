@@ -303,7 +303,7 @@ def send_queued(processes=1, log_level=None, ignore_slow=False):
     orgs = Organization.objects.all()
     queued_emails_by_org = {}
     for org in orgs:
-        if org.sender.auth and org.sender.auth.host_service == GOOGLE:
+        if org.sender and org.sender.auth and org.sender.auth.host_service == GOOGLE:
             queued_unsliced = get_queued_for_google(org)
         else:
             queued_unsliced = get_queued(organization=org)
