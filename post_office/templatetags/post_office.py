@@ -7,18 +7,23 @@ from django.conf import settings
 from django.contrib.staticfiles import finders
 from django.core.files import File
 from django.core.files.images import ImageFile
+from django.core.files.storage import default_storage
 
 register = template.Library()
 
 
 @register.simple_tag(takes_context=True)
 def inline_image(context, file):
+    # todo - use pillow to resize the logo when it's first uploaded to s3 so we can save on it a little
+    # todo but check that no other script or document will need it larger?
     assert hasattr(context.template, '_attached_images'), \
         "You must use template engine 'post_office' when rendering images using templatetag 'inline_image'."
     if isinstance(file, ImageFile):
         fileobj = file
     elif os.path.isabs(file) and os.path.exists(file):
         fileobj = File(open(file, 'rb'), name=file)
+    elif default_storage.exists(file):
+        fileobj = default_storage.open(file, mode='rb')
     else:
         try:
             absfilename = finders.find(file)
