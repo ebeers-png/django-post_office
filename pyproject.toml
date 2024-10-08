@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["post_office"]
+
+[project]
+name = "django-post_office"
+version = "0.0.0"
+description = "A Django app to monitor and send mail asynchronously, complete with template support."
+readme = {file = "README.md", content-type = "text/markdown"}
+license = {text = "MIT"}
+requires-python = ">=3.9"
+authors = [{name = "Selwin Ong", email = "selwin.ong@gmail.com"}]
+classifiers = [
+    'Development Status :: 5 - Production/Stable',
+    'Framework :: Django',
+    'License :: OSI Approved :: MIT License',
+    'Operating System :: OS Independent',
+    'Programming Language :: Python',
+    'Programming Language :: Python :: 3',
+    'Programming Language :: Python :: 3 :: Only',
+    'Programming Language :: Python :: 3.7',
+    'Programming Language :: Python :: 3.8',
+    'Programming Language :: Python :: 3.9',
+]
+dependencies = [
+"bleach[css]==6.0.0",
+"django>=2.2",
+"jsonfield>=3.0",
+"pytz",
+]
+
+[project.urls]
+homepage = "https://github.com/ebeers-png/django-post_office"
