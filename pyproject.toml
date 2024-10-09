@@ -33,4 +33,4 @@ dependencies = [
 ]
 
 [project.urls]
-homepage = "https://github.com/ebeers-png/django-post_office"
+Repository = "https://github.com/ebeers-png/django-post_office"
