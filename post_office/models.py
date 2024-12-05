@@ -179,7 +179,19 @@ class Email(models.Model):
         # construct the object to send
         msg = None
         sender = self.organization.sender
-        if sender.auth and connection:
+
+        if sender and self.from_email != sender.email_address and self.status is STATUS.queued:
+            # if the email is still queued, and the previous sender address was something else,
+            # make sure it matches up with the organization's current one! this will ensure
+            # mail can always be resent.
+            self.logs.create(
+                status=STATUS.queued,  # status will just show as '-'
+                message=f'Updated sender address from \'{self.from_email}\' to \'{sender.email_address}\''
+            )
+            self.from_email = sender.email_address
+            self.save()
+
+        if sender and sender.auth and connection:
             if sender.auth.host_service == MICROSOFT or sender.auth.host_service == EXCHANGE_OAUTH:
                 # connection will be a python-o365 Account object
                 # msg will be a python-o365 Message object

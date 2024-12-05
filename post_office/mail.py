@@ -139,7 +139,7 @@ def send(recipients=None, sender=None, template=None, context=None, subject='',
         if getattr(organization, 'sender', False):
             sender = organization.sender.email_address
         else:
-            sender = settings.DEFAULT_FROM_EMAIL
+            sender = settings.SERVER_EMAIL
 
     priority = parse_priority(priority)
 
