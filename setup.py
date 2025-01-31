@@ -51,7 +51,6 @@ setup(
         'bleach[css]==6.0.0',
         'django>=2.2',
         'jsonfield>=3.0',
-        'exchangelib==4.9.0',
         'pytz',
     ],
     classifiers=[
