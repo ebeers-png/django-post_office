@@ -22,10 +22,16 @@ import os
 import platform
 import tempfile
 import time
+from django.core.files.storage import default_storage
+from django.core.files.storage import FileSystemStorage
+from django.conf import settings
 
 
 class FileLocked(Exception):
     pass
+
+
+TMP_STORAGE = default_storage if settings.USE_S3 else FileSystemStorage(location='/tmp')
 
 
 class FileLock:
@@ -43,7 +49,7 @@ class FileLock:
 
     def get_lock_pid(self):
         try:
-            return int(open(self.lock_filename).read())
+            return int(TMP_STORAGE.open(self.lock_filename).read())
         except IOError:
             # If we can't read symbolic link, there are two possibilities:
             # 1. The symbolic link is dead (point to non existing file)
@@ -119,27 +125,16 @@ class FileLock:
         across platforms that points to it. Symlink is used because it's an
         atomic operation across platforms.
         """
-
-        pid_file = os.open(self.pid_filename, os.O_CREAT | os.O_EXCL | os.O_RDWR)
-        os.write(pid_file, str(os.getpid()).encode('utf-8'))
-        os.close(pid_file)
-
-        if hasattr(os, 'symlink') and platform.system() != 'Windows':
-            os.symlink(self.pid_filename, self.lock_filename)
-        else:
-            # Windows platforms doesn't support symlinks, at least not through the os API
-            self.lock_filename = self.pid_filename
+        pid = str(os.getpid())
+        mode = "xwb" if settings.USE_S3 else "xb"
+        with TMP_STORAGE.open(self.lock_filename, mode=mode) as lock_file:
+            lock_file.write(pid.encode('utf-8'))
+        self._pid = pid
 
     def release(self):
         """Try to delete the lock files. Doesn't matter if we fail"""
-        if self.lock_filename != self.pid_filename:
-            try:
-                os.unlink(self.lock_filename)
-            except OSError:
-                pass
-
         try:
-            os.remove(self.pid_filename)
+            TMP_STORAGE.delete(self.lock_filename)
         except OSError:
             pass
 
@@ -152,4 +147,4 @@ class FileLock:
         self.release()
 
 
-default_lockfile = os.path.join(tempfile.gettempdir(), 'post_office')
+default_lockfile = os.path.join('tmp', 'post_office') if settings.USE_S3 else os.path.join(tempfile.gettempdir(), 'post_office')
