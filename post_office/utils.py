@@ -89,7 +89,7 @@ def create_attachments(attachment_files):
 
         if isinstance(content, str):
             # `content` is a filename - try to open the file
-            opened_file = open(content, 'rb')
+            opened_file = open(content, 'rb')  # todo s3
             content = File(opened_file)
 
         attachment = Attachment()
