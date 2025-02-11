@@ -4,6 +4,7 @@ import re
 from collections import namedtuple
 from uuid import uuid4
 from email.mime.nonmultipart import MIMENonMultipart
+from io import BytesIO
 
 from django.conf import settings
 from django.core.exceptions import ValidationError
@@ -216,18 +217,18 @@ class Email(models.Model):
 
                 # Add an inline logo header.
                 if self.template and self.template.use_logo_header:
-                    logo_path = os.path.join(settings.MEDIA_ROOT, self.organization.logo.filename())
+                    logo = self.organization.logo
                     # todo check that the cid we have found is the logo itself?
                     match = re.search(r'src="cid:([a-zA-Z0-9]*)"', html_message)
                     if match:
-                        msg.attachments.add(logo_path)
+                        msg.attachments.add([(BytesIO(logo.file.read()), logo.filename())])
                         att = msg.attachments[0]
                         att.is_inline = True
                         att.content_id = match.group(1)
                 for attachment in self.attachments.all():
                     try:
-                        path = os.path.join(settings.MEDIA_ROOT, attachment.file.name)  # should be the relative path
-                        msg.attachments.add([(path, attachment.name)])  # must add as a list of tuples to add a custom name
+                        msg.attachments.add([(BytesIO(attachment.file.read()), attachment.name)])  # must add as a list of tuples to add a custom name
+                        attachment.file.close()
                     except Exception as e:
                         self.logs.create(status=STATUS.failed, message='Error adding attachment %s: %s' % (attachment.name, str(e)), exception_type=type(e).__name__)
 
@@ -260,7 +261,7 @@ class Email(models.Model):
 
                 for attachment in self.attachments.all():
                     try:
-                        path = os.path.join(settings.MEDIA_ROOT, attachment.file.name)
+                        path = os.path.join(settings.MEDIA_ROOT, attachment.file.name)  # todo s3
                         binary_file_content = default_storage.open(path).read()
                         file = FileAttachment(name=attachment.name, content=binary_file_content)
                         msg.attach(file)
@@ -283,7 +284,7 @@ class Email(models.Model):
                 # Add an inline logo header.
                 if self.template and self.template.use_logo_header:
                     try:
-                        logo_path = os.path.join(settings.MEDIA_ROOT, self.organization.logo.filename())
+                        logo_path = os.path.join(settings.MEDIA_ROOT, self.organization.logo.filename())  # todo s3
                         file_name = os.path.basename(logo_path)
                         match = re.search(r'src="cid:([a-zA-Z0-9]*)"', html_message)
                         if match:
@@ -291,7 +292,7 @@ class Email(models.Model):
                             if ctype is None or encoding is not None:
                                 ctype = 'application/octet-stream'
                             maintype, subtype = ctype.split('/', 1)
-                            with open(logo_path, 'rb') as img:
+                            with open(logo_path, 'rb') as img:  # todo s3
                                 message.add_attachment(
                                     img.read(),
                                     maintype=maintype,
@@ -306,7 +307,7 @@ class Email(models.Model):
                 for attachment in self.attachments.all():
                     try:
                         # code from the email examples library https://docs.python.org/3/library/email.examples.html
-                        path = os.path.join(settings.MEDIA_ROOT, attachment.file.name)  # should be the relative path
+                        path = os.path.join(settings.MEDIA_ROOT, attachment.file.name)  # should be the relative path  # todo s3
                         if not os.path.isfile(path):
                             continue
                             # Guess the content type based on the file's extension.  Encoding
@@ -318,7 +319,7 @@ class Email(models.Model):
                             # use a generic bag-of-bits type.
                             ctype = 'application/octet-stream'
                         maintype, subtype = ctype.split('/', 1)
-                        with open(path, 'rb') as fp:
+                        with open(path, 'rb') as fp:  # todo s3
                             message.add_attachment(
                                 fp.read(),
                                 maintype=maintype,
@@ -638,7 +639,7 @@ def get_upload_path(instance, filename):
     filename = '{name}.{ext}'.format(name=uuid4().hex,
                                      ext=filename.split('.')[-1])
 
-    return os.path.join('post_office_attachments', str(date.year),
+    return os.path.join('post_office_attachments', str(date.year),  # todo s3?
                         str(date.month), str(date.day), filename)
 
 
