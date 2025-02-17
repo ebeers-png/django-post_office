@@ -458,7 +458,7 @@ def send_queued(processes=1, log_level=None, ignore_slow=False, log_and_upload=F
     )
     if log_and_upload is True:
         logging.basicConfig(filename="send_mail.log", level=logger.info)
-        upload_to_s3("send_mail.log", "send_mail.log", settings.AWS_STORAGE_BUCKET_NAME)
+        print(upload_to_s3("send_mail.log", "send_mail.log", settings.AWS_STORAGE_BUCKET_NAME))
 
     return total_sent, total_failed, total_requeued
 
