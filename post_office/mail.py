@@ -457,6 +457,7 @@ def send_queued(processes=1, log_level=None, ignore_slow=False, log_and_upload=F
         total_email, total_sent, total_failed, total_requeued,
     )
     if log_and_upload is True:
+        print("We're reaching here....")
         logging.basicConfig(filename="send_mail.log", level=logger.info)
         print(upload_to_s3("send_mail.log", "send_mail.log", settings.AWS_STORAGE_BUCKET_NAME))
 
