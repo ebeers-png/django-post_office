@@ -11,6 +11,7 @@ from email.utils import make_msgid
 from multiprocessing import Pool
 from multiprocessing.dummy import Pool as ThreadPool
 
+
 from google_auth_httplib2 import AuthorizedHttp
 from httplib2 import Http
 
@@ -24,12 +25,13 @@ from .settings import (
 )
 from .signals import email_queued
 from .utils import (
-    create_attachments, get_email_template, parse_emails, parse_priority, split_emails,
+    create_attachments, get_email_template, parse_emails, parse_priority, split_emails,upload_to_s3
 )
 
 from seed.lib.superperms.orgs.models import Organization
 from helpdesk.models import Ticket
 from seed.utils.email import setup_basic_backend, add_custom_header
+import logging
 
 logger = setup_loghandlers("INFO")
 
@@ -292,7 +294,7 @@ def get_queued_for_google(org):
 
     return queued_list
 
-def send_queued(processes=1, log_level=None, ignore_slow=False):
+def send_queued(processes=1, log_level=None, ignore_slow=False, log_and_upload=False):
     """
     Sends out all queued mails that has scheduled_time less than now or None
     """
@@ -454,6 +456,9 @@ def send_queued(processes=1, log_level=None, ignore_slow=False):
         '%s emails attempted, %s sent, %s failed, %s requeued',
         total_email, total_sent, total_failed, total_requeued,
     )
+    if log_and_upload is True:
+        logging.basicConfig(filename="send_mail.log", level=logger.info)
+        upload_to_s3("send_mail.log", "send_mail.log", settings.AWS_STORAGE_BUCKET_NAME)
 
     return total_sent, total_failed, total_requeued
 
@@ -579,7 +584,7 @@ def _send_bulk(emails, uses_multiprocessing=True, log_level=None, organization=N
 
     return len(sent_emails), num_failed, num_requeued
 
-def send_queued_mail_until_done(lockfile=default_lockfile, processes=1, log_level=None, ignore_slow=False):
+def send_queued_mail_until_done(lockfile=default_lockfile, processes=1, log_level=None, ignore_slow=False, log_and_upload=False):
     """
     Send mail in queue batch by batch, until all emails have been processed.
     Updated to only send one batch at a time.
@@ -589,7 +594,7 @@ def send_queued_mail_until_done(lockfile=default_lockfile, processes=1, log_leve
             logger.info('Acquired lock for sending queued emails at %s.lock', lockfile)
             # while True:
             try:
-                send_queued(processes, log_level, ignore_slow=ignore_slow)
+                send_queued(processes, log_level, ignore_slow=ignore_slow, log_and_upload=log_and_upload)
             except Exception as e:
                 logger.exception(e, extra={'status_code': 500})
                 raise

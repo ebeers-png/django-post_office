@@ -27,6 +27,11 @@ class Command(BaseCommand):
             required=False,
             action='store_true',
         )
+        parser.add_argument(
+            '--log_and_upload',
+            required=False,
+            help='Log output of command into send_mail.log file and upload it to s3 bucket'
+        )
 
     def handle(self, *args, **options):
-        send_queued_mail_until_done(options['lockfile'], options['processes'], options.get('log_level'), ignore_slow=options.get('ignore_slow', False))
+        send_queued_mail_until_done(options['lockfile'], options['processes'], options.get('log_level'), ignore_slow=options.get('ignore_slow', False), log_and_upload=options.get('log_and_upload', False))
