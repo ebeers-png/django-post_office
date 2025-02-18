@@ -29,7 +29,6 @@ class Command(BaseCommand):
         )
         parser.add_argument(
             '--log_and_upload',
-            required=False,
             help='Log output of command into send_mail.log file and upload it to s3 bucket'
         )
 
