@@ -294,7 +294,7 @@ def get_queued_for_google(org):
 
     return queued_list
 
-def send_queued(processes=1, log_level=None, ignore_slow=False, log_and_upload=False):
+def send_queued(processes=1, log_level=None, ignore_slow=False, log_and_upload=True):
     """
     Sends out all queued mails that has scheduled_time less than now or None
     """
