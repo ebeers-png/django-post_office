@@ -33,5 +33,5 @@ class Command(BaseCommand):
         )
 
     def handle(self, *args, **options):
-        print(log_and_upload=options.get('log_and_upload', True))
+        print(options.get('log_and_upload', True))
         send_queued_mail_until_done(options['lockfile'], options['processes'], options.get('log_level'), ignore_slow=options.get('ignore_slow', False), log_and_upload=options.get('log_and_upload', True))
