@@ -1,4 +1,5 @@
 import sys
+import logging, io
 from functools import partial
 from django.conf import settings
 from django.core.exceptions import ValidationError
@@ -21,7 +22,7 @@ from .logutils import setup_loghandlers
 from post_office.models import Email, EmailTemplate, Log, PRIORITY, STATUS
 from .settings import (
     get_available_backends, get_batch_size, get_log_level, get_max_retries, get_message_id_enabled,
-    get_message_id_fqdn, get_retry_timedelta, get_sending_order, get_threads_per_process, get_template_engine
+    get_message_id_fqdn, get_retry_timedelta, get_sending_order, get_threads_per_process
 )
 from .signals import email_queued
 from .utils import (
@@ -30,8 +31,7 @@ from .utils import (
 
 from seed.lib.superperms.orgs.models import Organization
 from helpdesk.models import Ticket
-from seed.utils.email import setup_basic_backend, add_custom_header
-import logging
+from seed.utils.email import setup_basic_backend
 
 logger = setup_loghandlers("INFO")
 
@@ -294,7 +294,7 @@ def get_queued_for_google(org):
 
     return queued_list
 
-def send_queued(processes=1, log_level=None, ignore_slow=False, log_and_upload=True):
+def send_queued(processes=1, log_level=None, ignore_slow=False, log_and_upload=False):
     """
     Sends out all queued mails that has scheduled_time less than now or None
     """
@@ -452,17 +452,18 @@ def send_queued(processes=1, log_level=None, ignore_slow=False, log_and_upload=T
                 total_failed += sum(result[1] for result in results)
                 total_requeued += [result[2] for result in results]
 
+    stream = io.StringIO()
+    s3_logger = logging.getLogger()
+    logging.basicConfig(level=logging.INFO)
+    handler = logging.StreamHandler(stream)
+    s3_logger.addHandler(handler)
+ 
     logger.info(
         '%s emails attempted, %s sent, %s failed, %s requeued',
         total_email, total_sent, total_failed, total_requeued,
     )
     if log_and_upload is True:
-        print("We're reaching here....")
-        logging.basicConfig(filename="send_mail.log", level=logger.info)
-        print(upload_to_s3("send_mail.log", "send_mail.log", settings.AWS_STORAGE_BUCKET_NAME))
-    else:
-        print("We need to test another way")
-
+        upload_to_s3(stream.getvalue(), settings.AWS_STORAGE_BUCKET_NAME, "send_mail.log")
     return total_sent, total_failed, total_requeued
 
 
