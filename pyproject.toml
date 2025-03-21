@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 include = ["post_office*"]
 
 [project]
-name = "django-post_office"
+name = "beam-django-post-office"
 version = "3.6.3"
 description = "A Django app to monitor and send mail asynchronously, complete with template support."
 readme = {file = "README.md", content-type = "text/markdown"}
