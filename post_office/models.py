@@ -261,8 +261,7 @@ class Email(models.Model):
 
                 for attachment in self.attachments.all():
                     try:
-                        path = os.path.join(settings.MEDIA_ROOT, attachment.file.name)  # todo s3
-                        binary_file_content = default_storage.open(path).read()
+                        binary_file_content = attachment.file.read()
                         file = FileAttachment(name=attachment.name, content=binary_file_content)
                         msg.attach(file)
                     except Exception as e:
@@ -292,13 +291,12 @@ class Email(models.Model):
                             if ctype is None or encoding is not None:
                                 ctype = 'application/octet-stream'
                             maintype, subtype = ctype.split('/', 1)
-                            with open(logo_path, 'rb') as img:  # todo s3
-                                message.add_attachment(
-                                    img.read(),
-                                    maintype=maintype,
-                                    subtype=subtype,
-                                    cid=match.group(1),
-                                    filename=file_name)
+                            message.add_attachment(
+                                self.organization.logo.file.read(),
+                                maintype=maintype,
+                                subtype=subtype,
+                                cid=match.group(1),
+                                filename=file_name)
                     except Exception as e:
                         self.logs.create(status=STATUS.failed,
                                          message='Error adding template inline logo attachment: %s' % (str(e)),
@@ -308,23 +306,20 @@ class Email(models.Model):
                     try:
                         # code from the email examples library https://docs.python.org/3/library/email.examples.html
                         path = os.path.join(settings.MEDIA_ROOT, attachment.file.name)  # should be the relative path  # todo s3
-                        if not os.path.isfile(path):
-                            continue
-                            # Guess the content type based on the file's extension.  Encoding
-                            # will be ignored, although we should check for simple things like
-                            # gzip'd or compressed files.
+                        # Guess the content type based on the file's extension.  Encoding
+                        # will be ignored, although we should check for simple things like
+                        # gzip'd or compressed files.
                         ctype, encoding = guess_type(path)
                         if ctype is None or encoding is not None:
                             # No guess could be made, or the file is encoded (compressed), so
                             # use a generic bag-of-bits type.
                             ctype = 'application/octet-stream'
                         maintype, subtype = ctype.split('/', 1)
-                        with open(path, 'rb') as fp:  # todo s3
-                            message.add_attachment(
-                                fp.read(),
-                                maintype=maintype,
-                                subtype=subtype,
-                                filename=attachment.name)
+                        message.add_attachment(
+                            attachment.file.read(),
+                            maintype=maintype,
+                            subtype=subtype,
+                            filename=attachment.name)
                     except Exception as e:
                         self.logs.create(status=STATUS.failed,
                                          message='Error adding attachment %s: %s' % (attachment.name, str(e)),
