@@ -255,7 +255,7 @@ def get_queued_for_google(org):
         date__gte=date,
         email__organization=org
     )
-    daily_left = gmail_limit - daily_sent.count()
+    daily_left = max(gmail_limit - daily_sent.count(), 0)
     logger.info(f'Emails sent today: {daily_sent.count()}')
 
     # First, prioritize these emails and send as many of them as you can fit in the batch
