@@ -238,9 +238,11 @@ def get_queued_for_google(org):
     Google has a 2000 emails/day limit, but we don't want huge amounts of bulk emails to prevent other kinds of mail
     from being sent. This method caps the amount of bulk mail and allows other kinds of mail to always be prioritized.
     """
-    stagger = False # todo
+    stagger = False  # todo
     gmail_limit = 2000 - 1  # https://support.google.com/a/answer/166852?hl=en&fl=1&sjid=577582152286187260-NC
     priority_min = 300
+    if org.name == 'NYC':
+        gmail_limit = 5000
     priority_query = Q(priority__in=[PRIORITY.now, PRIORITY.high])  # todo or scheduled_time = now
     log_priority_query = Q(email__priority__in=[PRIORITY.now, PRIORITY.high])
 
@@ -303,7 +305,7 @@ def send_queued(processes=1, log_level=None, ignore_slow=False):
     orgs = Organization.objects.all()
     queued_emails_by_org = {}
     for org in orgs:
-        if org.sender and org.sender.auth and org.sender.auth.host_service == GOOGLE:
+        if org.sender and org.sender.auth and (org.sender.auth.host_service == GOOGLE or org.name == 'NYC'):
             queued_unsliced = get_queued_for_google(org)
         else:
             queued_unsliced = get_queued(organization=org)
@@ -476,7 +478,7 @@ def _send_bulk(emails, uses_multiprocessing=True, log_level=None, organization=N
     email_count = len(emails)
 
     logger.info('Process started, sending %s emails' % email_count)
-
+    # todo don't send emails if you can't mark them as sent in the DB!!!!
     # set up backend
     sender = organization.sender
     google_credentials = None
