@@ -2,6 +2,7 @@ from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.core.files import File
 from django.utils.encoding import force_str
+import boto3
 
 from post_office import cache
 from .models import Email, PRIORITY, STATUS, EmailTemplate, Attachment
@@ -32,6 +33,10 @@ def send_mail(subject, message, from_email, recipient_list, html_message='',
     """
     return emails
 
+def upload_to_s3(body, bucket, key):
+    s3 = boto3.client("s3")
+    s3.put_object(Body=body, Bucket=bucket, Key=key)
+    
 
 def get_email_template(name, language=''):
     """
