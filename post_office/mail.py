@@ -311,7 +311,7 @@ def send_queued(processes=1, log_level=None, ignore_slow=False):
             queued_unsliced = get_queued(organization=org)
         queued = []
         if queued_unsliced:
-            if org.email_slow_mode and not ignore_slow:
+            if org.email_slow_mode and not (ignore_slow or org.override_email_slow_mode):
                 if queued_unsliced.filter(source_page=Email.HELPDESK).exists():
                     logger.info(f'Sending for {org} in slow mode.')
                     queued += queued_unsliced.exclude(source_page=Email.HELPDESK)[:get_batch_size() - 1]
@@ -320,10 +320,11 @@ def send_queued(processes=1, log_level=None, ignore_slow=False):
                     logger.info(f'Turning off slow mode for {org}')
                     queued = queued_unsliced[:get_batch_size()]
                     org.email_slow_mode = False
+                    org.override_email_slow_mode = False
                     org.save()
             else:
                 helpdesk_mail = queued_unsliced.filter(source_page=Email.HELPDESK)
-                if ignore_slow or helpdesk_mail.count() < 40:
+                if ignore_slow or org.override_email_slow_mode or helpdesk_mail.count() < 40:
                     queued = queued_unsliced[:get_batch_size()]
                 else:
                     logger.info(f'Turning on slow mode for {org}')
@@ -416,6 +417,7 @@ def send_queued(processes=1, log_level=None, ignore_slow=False):
             total_email += len(queued)
         elif org.email_slow_mode:
             org.email_slow_mode = False
+            org.override_email_slow_mode = False
             org.save()
 
     logger.info('Started sending %s emails with %s processes.' % (total_email, processes))
