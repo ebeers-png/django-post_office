@@ -242,7 +242,7 @@ def get_queued_for_google(org):
     gmail_limit = 2000 - 1  # https://support.google.com/a/answer/166852?hl=en&fl=1&sjid=577582152286187260-NC
     priority_min = 300
     if org.name == 'NYC':
-        gmail_limit = 5000
+        gmail_limit = 10000 - 1
     priority_query = Q(priority__in=[PRIORITY.now, PRIORITY.high])  # todo or scheduled_time = now
     log_priority_query = Q(email__priority__in=[PRIORITY.now, PRIORITY.high])
 
