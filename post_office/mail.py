@@ -233,16 +233,22 @@ def get_queued(organization=None, extra_q=None):
                 .select_related('template') \
                 .order_by(*get_sending_order()).prefetch_related('attachments')
 
-def get_queued_for_google(org):
+
+def get_queued_for_google(org, host_service):
     """
     Google has a 2000 emails/day limit, but we don't want huge amounts of bulk emails to prevent other kinds of mail
     from being sent. This method caps the amount of bulk mail and allows other kinds of mail to always be prioritized.
+    Non-Google accounts are capped by us at 9000 emails per day.
     """
+    from seed.models import GOOGLE
+
     stagger = False  # todo
     gmail_limit = 2000 - 1  # https://support.google.com/a/answer/166852?hl=en&fl=1&sjid=577582152286187260-NC
     priority_min = 300
-    if org.name == 'NYC':
-        gmail_limit = 10000 - 1
+    if host_service != GOOGLE:
+        gmail_limit = 9000 - 1
+        priority_min = 1000
+
     priority_query = Q(priority__in=[PRIORITY.now, PRIORITY.high])  # todo or scheduled_time = now
     log_priority_query = Q(email__priority__in=[PRIORITY.now, PRIORITY.high])
 
@@ -298,17 +304,14 @@ def send_queued(processes=1, log_level=None, ignore_slow=False):
     """
     Sends out all queued mails that has scheduled_time less than now or None
     """
-    from seed.models import GOOGLE
     total_sent, total_failed, total_requeued, total_email = 0, 0, 0, 0
-    gmail_limit = 2000 - 1  # https://support.google.com/a/answer/166852?hl=en&fl=1&sjid=577582152286187260-NC
-    date = timezone.now() - timedelta(days=1)
     orgs = Organization.objects.all()
     queued_emails_by_org = {}
     for org in orgs:
-        if org.sender and org.sender.auth and (org.sender.auth.host_service == GOOGLE or org.name == 'NYC'):
-            queued_unsliced = get_queued_for_google(org)
+        if org.sender and org.sender.auth:
+            queued_unsliced = get_queued_for_google(org, org.sender.auth.host_service)
         else:
-            queued_unsliced = get_queued(organization=org)
+            queued_unsliced = get_queued_for_google(org, None)
         queued = []
         if queued_unsliced:
             if org.email_slow_mode and not (ignore_slow or org.override_email_slow_mode):
