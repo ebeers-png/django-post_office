@@ -1,4 +1,5 @@
 import sys
+import logging, io
 from functools import partial
 from django.conf import settings
 from django.core.exceptions import ValidationError
@@ -11,6 +12,7 @@ from email.utils import make_msgid
 from multiprocessing import Pool
 from multiprocessing.dummy import Pool as ThreadPool
 
+
 from google_auth_httplib2 import AuthorizedHttp
 from httplib2 import Http
 
@@ -20,16 +22,16 @@ from .logutils import setup_loghandlers
 from post_office.models import Email, EmailTemplate, Log, PRIORITY, STATUS
 from .settings import (
     get_available_backends, get_batch_size, get_log_level, get_max_retries, get_message_id_enabled,
-    get_message_id_fqdn, get_retry_timedelta, get_sending_order, get_threads_per_process, get_template_engine
+    get_message_id_fqdn, get_retry_timedelta, get_sending_order, get_threads_per_process
 )
 from .signals import email_queued
 from .utils import (
-    create_attachments, get_email_template, parse_emails, parse_priority, split_emails,
+    create_attachments, get_email_template, parse_emails, parse_priority, split_emails,upload_to_s3
 )
 
 from seed.lib.superperms.orgs.models import Organization
 from helpdesk.models import Ticket
-from seed.utils.email import setup_basic_backend, add_custom_header
+from seed.utils.email import setup_basic_backend
 
 logger = setup_loghandlers("INFO")
 
@@ -300,7 +302,7 @@ def get_queued_for_google(org, host_service):
 
     return queued_list
 
-def send_queued(processes=1, log_level=None, ignore_slow=False):
+def send_queued(processes=1, log_level=None, ignore_slow=False, log_and_upload=False):
     """
     Sends out all queued mails that has scheduled_time less than now or None
     """
@@ -457,11 +459,21 @@ def send_queued(processes=1, log_level=None, ignore_slow=False):
                 total_failed += sum(result[1] for result in results)
                 total_requeued += [result[2] for result in results]
 
+    stream = io.StringIO()
+    s3_logger = logging.getLogger()
+    logging.basicConfig(level=logging.INFO)
+    handler = logging.StreamHandler(stream)
+    s3_logger.addHandler(handler)
+ 
     logger.info(
         '%s emails attempted, %s sent, %s failed, %s requeued',
         total_email, total_sent, total_failed, total_requeued,
     )
-
+    if log_and_upload is True:
+        s3_logger.info(
+        '%s emails attempted, %s sent, %s failed, %s requeued',
+        total_email, total_sent, total_failed, total_requeued,)
+        upload_to_s3(stream.getvalue(), settings.AWS_STORAGE_BUCKET_NAME, "send_mail.log")
     return total_sent, total_failed, total_requeued
 
 
@@ -586,7 +598,7 @@ def _send_bulk(emails, uses_multiprocessing=True, log_level=None, organization=N
 
     return len(sent_emails), num_failed, num_requeued
 
-def send_queued_mail_until_done(lockfile=default_lockfile, processes=1, log_level=None, ignore_slow=False):
+def send_queued_mail_until_done(lockfile=default_lockfile, processes=1, log_level=None, ignore_slow=False, log_and_upload=False):
     """
     Send mail in queue batch by batch, until all emails have been processed.
     Updated to only send one batch at a time.
@@ -596,7 +608,7 @@ def send_queued_mail_until_done(lockfile=default_lockfile, processes=1, log_leve
             logger.info('Acquired lock for sending queued emails at %s.lock', lockfile)
             # while True:
             try:
-                send_queued(processes, log_level, ignore_slow=ignore_slow)
+                send_queued(processes, log_level, ignore_slow=ignore_slow, log_and_upload=log_and_upload)
             except Exception as e:
                 logger.exception(e, extra={'status_code': 500})
                 raise
