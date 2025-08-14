@@ -1,4 +1,5 @@
 import sys
+import itertools
 from functools import partial
 from django.conf import settings
 from django.core.exceptions import ValidationError
@@ -211,6 +212,58 @@ def send_many(kwargs_list):
         email_queued.send(sender=Email, emails=emails)
 
 
+def get_address_filter(org, date):
+    """
+    Email accounts have limits on the number of recipients they can email per day.
+    There is typically a limit on both total recipients (daily_addr_limit) and non-relationship recipients, or
+    addresses you've never mailed before (daily_new_addr_limit).
+
+    This method returns a list of addresses that are safe to send to for the current queued emails.
+    Returns [] if no addresses should be emailed (i.e. account is over the daily limit for emails sent).
+    """
+    daily_total_addr_limit = 5000
+    daily_new_addr_limit = 1000
+
+    # first check if we have gone over the daily_addr_limit: if so, we cannot email anyone
+    addrs_mailed_today = Email.objects.filter(
+        created__gte=date,
+        organization=org
+    ).exclude(status=STATUS.queued).values_list('to', flat=True)
+    # turn list of lists into a unique set of ids
+    addrs_mailed_today = set(itertools.chain.from_iterable(addrs_mailed_today))
+    total_addr_limit = max(daily_total_addr_limit - len(addrs_mailed_today), 0)
+    if total_addr_limit == 0:
+        # cannot email more than 5000 recipients per day
+        return []
+
+    # next, count how many new addresses we have already emailed today to find our limit for new addrs
+    addrs_mailed_before_today = Email.objects.filter(
+        created__lte=date,
+        organization=org
+    ).exclude(status=STATUS.queued).values_list('to', flat=True)
+    addrs_mailed_before_today = set(itertools.chain.from_iterable(addrs_mailed_before_today))
+    new_addrs_mailed_today_count = len(addrs_mailed_today.difference(addrs_mailed_before_today))
+    new_addr_limit = max(daily_new_addr_limit - new_addrs_mailed_today_count, 0)
+
+    # then, get all queued addrs, and cut down the list of new addrs to meet our daily limit
+    all_addrs_mailed = Email.objects.filter(  # get all addrs we've ever mailed
+        organization=org
+    ).exclude(status=STATUS.queued).values_list('to', flat=True)
+    all_addrs_mailed = set(itertools.chain.from_iterable(all_addrs_mailed))
+
+    all_addrs_queued = Email.objects.filter(  # get all addrs in queue
+        organization=org,
+        status=STATUS.queued
+    ).values_list('to', flat=True)
+
+    all_addrs_queued = set(itertools.chain.from_iterable(all_addrs_queued))
+    new_addrs_queued = list(all_addrs_queued.difference(all_addrs_mailed))  # addrs we've never emailed before
+    old_addrs_queued = list(all_addrs_queued.intersection(all_addrs_mailed))  # addrs we've emailed before
+    new_addrs_queued = new_addrs_queued[:new_addr_limit]
+    addr_filter = old_addrs_queued + new_addrs_queued  # combine both lists
+    return addr_filter[:total_addr_limit]  # limit both of them by daily limit
+
+
 def get_queued(organization=None, extra_q=None):
     """
     Returns the queryset of emails eligible for sending – fulfilling these conditions:
@@ -263,6 +316,13 @@ def get_queued_for_google(org, host_service):
     )
     daily_left = max(gmail_limit - daily_sent.count(), 0)
     logger.info(f'Emails sent today: {daily_sent.count()}')
+
+    # do not send over the daily limit of recipients
+    addr_list = get_address_filter(org, date)
+    if not addr_list:
+        logger.info(f'Unable to send emails: reached limit on daily recipients mailed.')
+        return Email.objects.none()
+    priority_query &= Q(to__in=addr_list)
 
     # First, prioritize these emails and send as many of them as you can fit in the batch
     priority_queued = get_queued(org, priority_query)
