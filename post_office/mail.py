@@ -221,10 +221,10 @@ def get_address_filter(org, date, host_service):
     This method returns a list of addresses that are safe to send to for the current queued emails.
     Returns [] if no addresses should be emailed (i.e. account is over the daily limit for emails sent).
     """
-    daily_total_addr_limit = 5000
-    daily_new_addr_limit = 1000
+    daily_total_addr_limit = 9000  # microsoft default is 5000
+    daily_new_addr_limit = 1000  # microsoft default is 1000
 
-    # TODO: I'm making the assumption that these limits are for unique recipients,
+    # TODO: I'm making the assumption that the non-relationship limits are for unique recipients,
     #  but it's possible they aren't
 
     # first check if we have gone over the daily_addr_limit: if so, we cannot email anyone
@@ -233,8 +233,8 @@ def get_address_filter(org, date, host_service):
         created__gte=date,
         organization=org,
     ).values_list('to', flat=True)
-    # turn list of lists into a unique set of ids
-    addrs_mailed_today = set(itertools.chain.from_iterable(addrs_mailed_today))
+    # turn list of lists into a list
+    addrs_mailed_today = itertools.chain.from_iterable(addrs_mailed_today)
     total_addr_limit = max(daily_total_addr_limit - len(addrs_mailed_today), 0)
     if total_addr_limit == 0:
         # cannot email more than 5000 recipients per day
@@ -247,7 +247,7 @@ def get_address_filter(org, date, host_service):
         organization=org
     ).values_list('to', flat=True)
     addrs_mailed_before_today = set(itertools.chain.from_iterable(addrs_mailed_before_today))
-    new_addrs_mailed_today_count = len(addrs_mailed_today.difference(addrs_mailed_before_today))
+    new_addrs_mailed_today_count = len(set(addrs_mailed_today).difference(addrs_mailed_before_today))
     new_addr_limit = max(daily_new_addr_limit - new_addrs_mailed_today_count, 0)
 
     # then, get all queued addrs, and cut down the list of new addrs to meet our daily limit
