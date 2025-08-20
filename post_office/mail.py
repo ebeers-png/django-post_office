@@ -212,62 +212,30 @@ def send_many(kwargs_list):
         email_queued.send(sender=Email, emails=emails)
 
 
-def get_address_filter(org, date, host_service):
+def get_recipient_limit(org, date, host_limit=2000):
     """
     Email accounts have limits on the number of recipients they can email per day.
     There is typically a limit on both total recipients (daily_addr_limit) and non-relationship recipients, or
     addresses you've never mailed before (daily_new_addr_limit).
 
-    This method returns a list of addresses that are safe to send to for the current queued emails.
-    Returns [] if no addresses should be emailed (i.e. account is over the daily limit for emails sent).
+    This method returns the number of emails that can be sent today, and does not currently take into account
+    non-relationship recipients. For that code, please see previous commits.
     """
-    daily_total_addr_limit = 9000  # microsoft default is 5000
-    daily_new_addr_limit = 1000  # microsoft default is 1000
-
-    # TODO: I'm making the assumption that the non-relationship limits are for unique recipients,
-    #  but it's possible they aren't
+    daily_total_addr_limit = host_limit  # microsoft default is 5000
 
     # first check if we have gone over the daily_addr_limit: if so, we cannot email anyone
     addrs_mailed_today = Email.objects.filter(
         status__in=[STATUS.sent, STATUS.failed],
-        created__gte=date,
+        logs__date__gte=date,
         organization=org,
     ).values_list('to', flat=True)
     # turn list of lists into a list
-    addrs_mailed_today = itertools.chain.from_iterable(addrs_mailed_today)
+    addrs_mailed_today = list(itertools.chain.from_iterable(addrs_mailed_today))
     total_addr_limit = max(daily_total_addr_limit - len(addrs_mailed_today), 0)
     if total_addr_limit == 0:
         # cannot email more than 5000 recipients per day
-        return []
-
-    # next, count how many new addresses we have already emailed today to find our limit for new addrs
-    addrs_mailed_before_today = Email.objects.filter(
-        status__in=[STATUS.sent, STATUS.failed],
-        created__lte=date,
-        organization=org
-    ).values_list('to', flat=True)
-    addrs_mailed_before_today = set(itertools.chain.from_iterable(addrs_mailed_before_today))
-    new_addrs_mailed_today_count = len(set(addrs_mailed_today).difference(addrs_mailed_before_today))
-    new_addr_limit = max(daily_new_addr_limit - new_addrs_mailed_today_count, 0)
-
-    # then, get all queued addrs, and cut down the list of new addrs to meet our daily limit
-    all_addrs_mailed = Email.objects.filter(  # get all addrs we've ever mailed
-        status__in=[STATUS.sent, STATUS.failed],
-        organization=org,
-    ).values_list('to', flat=True)
-    all_addrs_mailed = set(itertools.chain.from_iterable(all_addrs_mailed))
-
-    all_addrs_queued = Email.objects.filter(  # get all addrs in queue
-        organization=org,
-        status__in=[STATUS.queued, STATUS.requeued]
-    ).values_list('to', flat=True)
-
-    all_addrs_queued = set(itertools.chain.from_iterable(all_addrs_queued))
-    new_addrs_queued = list(all_addrs_queued.difference(all_addrs_mailed))  # addrs we've never emailed before
-    old_addrs_queued = list(all_addrs_queued.intersection(all_addrs_mailed))  # addrs we've emailed before
-    new_addrs_queued = new_addrs_queued[:new_addr_limit]
-    addr_filter = old_addrs_queued + new_addrs_queued  # combine both lists
-    return addr_filter[:total_addr_limit]  # limit both of them by daily limit
+        return 0
+    return total_addr_limit
 
 
 def get_queued(organization=None, extra_q=None):
@@ -305,16 +273,16 @@ def get_queued_for_google(org, host_service):
         return []
 
     stagger = False  # todo
-    gmail_limit = 2000 - 1  # https://support.google.com/a/answer/166852?hl=en&fl=1&sjid=577582152286187260-NC
+    email_limit = 2000 - 1  # https://support.google.com/a/answer/166852?hl=en&fl=1&sjid=577582152286187260-NC
     priority_min = 300
     if host_service != GOOGLE:
-        gmail_limit = 9000 - 1
+        email_limit = 9000 - 1
         priority_min = 1000
 
     priority_query = Q(priority__in=[PRIORITY.now, PRIORITY.high])  # todo or scheduled_time = now
     log_priority_query = Q(email__priority__in=[PRIORITY.now, PRIORITY.high])
 
-    regular_limit = gmail_limit - priority_min
+    regular_limit = email_limit - priority_min
     batch = get_batch_size()
     date = timezone.now() - timedelta(days=1)
 
@@ -323,19 +291,18 @@ def get_queued_for_google(org, host_service):
         date__gte=date,
         email__organization=org
     )
-    daily_left = max(gmail_limit - daily_sent.count(), 0)
+    daily_left = max(email_limit - daily_sent.count(), 0)
     logger.info(f'Emails sent today: {daily_sent.count()}')
 
     # do not send over the daily limit of recipients
-    addr_list = get_address_filter(org, date)
-    if not addr_list:
+    recipients_left = get_recipient_limit(org, date, email_limit)
+    if not recipients_left:
         logger.info(f'Unable to send emails: reached limit on daily recipients mailed.')
         return Email.objects.none()
-    addr_query = Q(to__in=addr_list)
-    log_addr_query = Q(email__to__in=addr_list)
+    daily_left = min(recipients_left, daily_left)
 
     # First, prioritize these emails and send as many of them as you can fit in the batch
-    priority_queued = get_queued(org, priority_query & addr_query)
+    priority_queued = get_queued(org, priority_query)
     if daily_left < batch:
         batch = daily_left
     queued_list = priority_queued[:batch]
@@ -347,14 +314,14 @@ def get_queued_for_google(org, host_service):
     if batch_left == 0:
         return Email.objects.filter(id__in=queued_list)
 
-    daily_priority_sent = daily_sent.filter(log_priority_query & log_addr_query).count()
-    daily_regular_sent = daily_sent.filter(~log_priority_query & log_addr_query).count()
+    daily_priority_sent = daily_sent.filter(log_priority_query).count()
+    daily_regular_sent = daily_sent.filter(~log_priority_query).count()
 
     # Get the rest of the emails
-    regular_queued = get_queued(org, ~priority_query & addr_query)
+    regular_queued = get_queued(org, ~priority_query)
     # If more priority mail has been sent than the min number of priority emails, then we'll adjust the limit for regular mail
     if daily_priority_sent + queued_count > priority_min:
-        regular_limit = gmail_limit - daily_priority_sent - len(queued_list)
+        regular_limit = email_limit - daily_priority_sent - len(queued_list)
 
     # Based on the new limit for regular mail, how much can we send?
     daily_regular_left = regular_limit - daily_regular_sent
