@@ -1,4 +1,5 @@
 import sys
+import itertools
 from functools import partial
 from django.conf import settings
 from django.core.exceptions import ValidationError
@@ -211,6 +212,32 @@ def send_many(kwargs_list):
         email_queued.send(sender=Email, emails=emails)
 
 
+def get_recipient_limit(org, date, host_limit=2000):
+    """
+    Email accounts have limits on the number of recipients they can email per day.
+    There is typically a limit on both total recipients (daily_addr_limit) and non-relationship recipients, or
+    addresses you've never mailed before (daily_new_addr_limit).
+
+    This method returns the number of emails that can be sent today, and does not currently take into account
+    non-relationship recipients. For that code, please see previous commits.
+    """
+    daily_total_addr_limit = host_limit  # microsoft default is 5000
+
+    # first check if we have gone over the daily_addr_limit: if so, we cannot email anyone
+    addrs_mailed_today = Email.objects.filter(
+        status__in=[STATUS.sent, STATUS.failed],
+        logs__date__gte=date,
+        organization=org,
+    ).values_list('to', flat=True)
+    # turn list of lists into a list
+    addrs_mailed_today = list(itertools.chain.from_iterable(addrs_mailed_today))
+    total_addr_limit = max(daily_total_addr_limit - len(addrs_mailed_today), 0)
+    if total_addr_limit == 0:
+        # cannot email more than 5000 recipients per day
+        return 0
+    return total_addr_limit
+
+
 def get_queued(organization=None, extra_q=None):
     """
     Returns the queryset of emails eligible for sending – fulfilling these conditions:
@@ -241,18 +268,21 @@ def get_queued_for_google(org, host_service):
     Non-Google accounts are capped by us at 9000 emails per day.
     """
     from seed.models import GOOGLE
+    if not Email.objects.filter(organization=org, status__in=[STATUS.queued, STATUS.requeued]).exists():
+        logger.info(f'No queued emails found, skipping org')
+        return []
 
     stagger = False  # todo
-    gmail_limit = 2000 - 1  # https://support.google.com/a/answer/166852?hl=en&fl=1&sjid=577582152286187260-NC
+    email_limit = 2000 - 1  # https://support.google.com/a/answer/166852?hl=en&fl=1&sjid=577582152286187260-NC
     priority_min = 300
     if host_service != GOOGLE:
-        gmail_limit = 9000 - 1
+        email_limit = 9000 - 1
         priority_min = 1000
 
     priority_query = Q(priority__in=[PRIORITY.now, PRIORITY.high])  # todo or scheduled_time = now
     log_priority_query = Q(email__priority__in=[PRIORITY.now, PRIORITY.high])
 
-    regular_limit = gmail_limit - priority_min
+    regular_limit = email_limit - priority_min
     batch = get_batch_size()
     date = timezone.now() - timedelta(days=1)
 
@@ -261,8 +291,15 @@ def get_queued_for_google(org, host_service):
         date__gte=date,
         email__organization=org
     )
-    daily_left = max(gmail_limit - daily_sent.count(), 0)
+    daily_left = max(email_limit - daily_sent.count(), 0)
     logger.info(f'Emails sent today: {daily_sent.count()}')
+
+    # do not send over the daily limit of recipients
+    recipients_left = get_recipient_limit(org, date, email_limit)
+    if not recipients_left:
+        logger.info(f'Unable to send emails: reached limit on daily recipients mailed.')
+        return Email.objects.none()
+    daily_left = min(recipients_left, daily_left)
 
     # First, prioritize these emails and send as many of them as you can fit in the batch
     priority_queued = get_queued(org, priority_query)
@@ -284,7 +321,7 @@ def get_queued_for_google(org, host_service):
     regular_queued = get_queued(org, ~priority_query)
     # If more priority mail has been sent than the min number of priority emails, then we'll adjust the limit for regular mail
     if daily_priority_sent + queued_count > priority_min:
-        regular_limit = gmail_limit - daily_priority_sent - len(queued_list)
+        regular_limit = email_limit - daily_priority_sent - len(queued_list)
 
     # Based on the new limit for regular mail, how much can we send?
     daily_regular_left = regular_limit - daily_regular_sent
