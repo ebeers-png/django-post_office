@@ -441,7 +441,7 @@ def send_queued(processes=1, log_level=None, ignore_slow=False):
 
                     # _, beam_header = add_custom_header(list(cc))
                     log_mail = send(
-                        recipients=['beammonitoring@gmail.com'],
+                        recipients=['beammonitoring@gmail.com', 'lcontreras@clearlyenergy.com', 'ebeers@clearlyenergy.com'],
                         sender=org.sender.email_address,
                         subject=f'IMPORTANT: Helpdesk email overflow detected',
                         message=msg_plain,
