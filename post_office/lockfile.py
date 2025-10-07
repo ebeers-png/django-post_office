@@ -71,6 +71,11 @@ class FileLock:
         if lock_pid is None:
             return False
 
+        # todo Kubernetes pods all use a pid of 1 apparently
+        if self._pid == lock_pid and lock_pid == 1:
+            self.release()
+            return False
+
         # this is our process
         if self._pid == lock_pid:
             return True
