@@ -644,4 +644,5 @@ def send_queued_mail_until_done(lockfile=default_lockfile, processes=1, log_leve
             # if not get_queued().exists():
             #     break
     except FileLocked:
-        logger.info('Failed to acquire lock, terminating now.')
+        logger.error("Failed to acquire lock, terminating now.")
+        raise Exception("Failed to acquire lock, terminating now.")
